@@ -1,0 +1,17 @@
+# Personal inventory (bring your own; see my-spools.example.json)
+my-spools.json
+my-spools.csv
+
+# Slicer projects and generated reports
+*.3mf
+*.html
+
+# filamentcolors.xyz cache, if kept alongside the script
+filamentcolors.json
+
+# Python / editor / OS cruft
+__pycache__/
+*.pyc
+.venv/
+venv/
+.DS_Store

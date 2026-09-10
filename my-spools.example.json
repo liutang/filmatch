@@ -1,0 +1,30 @@
+[
+  {
+    "brand": "Bambu Lab",
+    "material": "PLA",
+    "material_type": "Matte",
+    "color": "Ivory White",
+    "rgb": "#EAE4D4",
+    "remaining_grams": 820,
+    "location": "AMS 1",
+    "notes": null
+  },
+  {
+    "brand": "Polymaker",
+    "material": "PLA",
+    "material_type": "Basic",
+    "color": "Red",
+    "rgb": "#C8102E",
+    "remaining_grams": 1000,
+    "location": "Shelf"
+  },
+  {
+    "brand": "Overture",
+    "material": "PETG",
+    "material_type": "Basic",
+    "color": "Black",
+    "rgb": "#1A1A1A",
+    "remaining_grams": 300,
+    "location": "Drybox"
+  }
+]
