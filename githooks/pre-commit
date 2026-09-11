@@ -1,0 +1,22 @@
+#!/bin/sh
+# Refuse to commit any staged file that matches .gitignore -- catches an
+# accidental `git add -f my-spools.json` or similar. Bypass intentionally
+# with: git commit --no-verify
+#
+# Enable once per clone with:  git config core.hooksPath githooks
+
+staged=$(git diff --cached --name-only --diff-filter=ACM)
+[ -z "$staged" ] && exit 0
+
+# --no-index is required: a staged path is "tracked" as far as git is
+# concerned, and git check-ignore never reports a tracked path as ignored
+# unless --no-index forces pure pattern matching against the working tree.
+violations=$(printf '%s\n' "$staged" | git check-ignore --no-index --stdin)
+
+if [ -n "$violations" ]; then
+    echo "pre-commit: refusing to commit gitignored file(s):" >&2
+    printf '%s\n' "$violations" | sed 's/^/  /' >&2
+    echo "Unstage with 'git restore --staged <file>', or override with 'git commit --no-verify'." >&2
+    exit 1
+fi
+exit 0

@@ -100,6 +100,18 @@ sRGB → linear → CIE XYZ (D65) → CIELAB, then CIEDE2000 for every color dis
 Rough guide: ΔE < 1 is imperceptible, 1–2 is a close match, 2–5 is noticeable
 but often acceptable, > 5 is an obvious difference.
 
+## Development
+
+A pre-commit hook guards against accidentally committing a gitignored file
+(e.g. `git add -f my-spools.json`). Enable it once per clone:
+
+```sh
+git config core.hooksPath githooks
+```
+
+It refuses the commit and lists the offending path(s); override deliberately
+with `git commit --no-verify`.
+
 ## License
 
 MIT — see [LICENSE](LICENSE).
