@@ -5,6 +5,7 @@ my-spools.csv
 # Slicer projects and generated reports
 *.3mf
 *.html
+!web/index.html
 
 # filamentcolors.xyz cache, if kept alongside the script
 filamentcolors.json

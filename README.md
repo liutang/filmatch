@@ -6,7 +6,8 @@ tells you, slot by slot, which spool on your shelf is the closest match, how
 good that match is, and — optionally — what to buy when nothing you own is close
 enough.
 
-Single file, Python standard library only, Python 3.8+.
+Python standard library only, Python 3.8+. The CLI is a single file; the
+optional drag-and-drop web UI adds `web/index.html`.
 
 ## What it does
 
@@ -77,6 +78,32 @@ python3 filmatch.py Project.3mf --spools other.json --html report.html
 | `--refresh` | off | re-download the filamentcolors.xyz cache |
 | `--html FILE` | — | also write a visual HTML report |
 | `--no-color` | off | no ANSI color chips in the terminal (also respects `NO_COLOR`) |
+| `--serve` | off | run the drag-and-drop web UI on localhost (see below) |
+| `--port N` | `8765` | port for `--serve` (falls back to a free port if taken) |
+| `--no-browser` | off | with `--serve`, don't open a browser tab |
+
+## Web UI
+
+```sh
+filmatch --serve                 # or: python3 filmatch.py --serve
+```
+
+Starts a local server on `127.0.0.1` and opens the page in your browser. Drop a
+`.3mf` anywhere on the window (or click the drop area) and the report appears
+below it. Every option is a slider or switch, and the report re-renders as you
+change them, so you can drag the ΔE threshold and watch grades change. You can
+also drop your spool export (`.json` / `.csv`) to swap inventories; by default
+the server uses `--spools` from where you started it. **Download HTML report**
+saves the same standalone file `--html` writes.
+
+Flags passed with `--serve` become the page's defaults (for example,
+`filmatch --serve --suggest --threshold 3`), and a project path preloads it:
+`filmatch Project.3mf --serve`. Your slider settings are remembered in the
+browser; **Reset to defaults** returns to the server's.
+
+The analysis runs in the same Python code as the CLI, not in the browser, so
+the two always agree. filamentcolors.xyz sits behind Cloudflare and sends no
+CORS headers, so a page running only in the browser couldn't query it anyway.
 
 ## Reading the output
 

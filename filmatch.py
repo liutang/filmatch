@@ -5,6 +5,7 @@ filmatch - match a 3MF project's filament colors to spools you already own.
   python3 filmatch.py Project.3mf                       # --spools defaults to my-spools.json
   python3 filmatch.py Project.3mf --suggest --brands polymaker,bambu
   python3 filmatch.py Project.3mf --spools other.json --html report.html
+  python3 filmatch.py --serve                           # drag-and-drop web UI on localhost
 
 Reads Bambu Studio / OrcaSlicer 3MFs (per-plate usage, including painted
 regions) and PrusaSlicer 3MFs (slot colors + which slots are used).
@@ -16,11 +17,15 @@ measured Lab for the same filament (matched by vendor + material family, nearest
 color within a small ΔE tolerance), falling back to the slot's requested hex
 from the 3MF otherwise. Pass --no-measured to always use the requested hex.
 """
-import argparse, csv, html, json, math, os, re, sys, time, zipfile
+import argparse, csv, html, io, json, math, os, re, sys, time, zipfile
 import urllib.error, urllib.request
 import xml.etree.ElementTree as ET
 from collections import defaultdict
 from pathlib import Path
+
+
+class FilmatchError(Exception):
+    """A user-facing problem with an input file (shown as a message, not a traceback)."""
 
 # ---------------------------------------------------------------- color math
 HEX_RE = re.compile(r"^#?([0-9A-Fa-f]{6})([0-9A-Fa-f]{2})?$")
@@ -141,7 +146,9 @@ def _meta(el):
     return {m.get("key"): m.get("value") for m in el.findall("metadata")}
 
 
-def read_project(path):
+def read_project(path, name=None):
+    """`path` is a filename or a binary file object; `name` labels the report
+    (defaults to the file's name)."""
     z = zipfile.ZipFile(path)
     names = set(z.namelist())
     slots, source = [], "unknown"
@@ -167,7 +174,7 @@ def read_project(path):
         vendors = split("filament_vendor")
         source = ini.get("printer_model") or "PrusaSlicer"
     else:
-        sys.exit("No slicer config found in 3MF (expected Bambu/Orca or PrusaSlicer project).")
+        raise FilmatchError("No slicer config found in 3MF (expected a Bambu/Orca or PrusaSlicer project).")
 
     for i, c in enumerate(colors):
         profile = (ids[i] if i < len(ids) else "").split("@")[0].strip()
@@ -241,7 +248,7 @@ def read_project(path):
     for pl in plates:
         for s in pl["slots"]:
             slots[s - 1]["used_on"].append(pl["id"])
-    return {"file": Path(path).name, "source": source, "slots": slots, "plates": plates}
+    return {"file": name or Path(path).name, "source": source, "slots": slots, "plates": plates}
 
 # ----------------------------------------------------------------- inventory
 def load_spools(path, min_grams=1, exclude_finishes=()):
@@ -483,7 +490,9 @@ def alt_candidates(r, k, pick_d):
     worth showing once you own the color outright."""
     if round(pick_d, 1) == 0:
         return []
-    return [(dd, j) for dd, j in r["ranked"] if j != k]
+    # The assignment can hand this slot a spool from outside `ranked`; cap the
+    # list so --top N still means N alternates.
+    return [(dd, j) for dd, j in r["ranked"] if j != k][:len(r["ranked"]) - 1]
 
 
 def print_report(project, rows, spools, threshold, color, skipped):
@@ -520,16 +529,43 @@ def print_report(project, rows, spools, threshold, color, skipped):
         print()
 
 
-def write_html(path, project, rows, spools, threshold):
+# Report styles shared by the standalone --html file and the --serve page. Colors
+# are CSS variables with light fallbacks so the web UI can re-theme them.
+REPORT_CSS = """\
+.fm-report{color:var(--fm-fg,#222)}
+.fm-report h2{margin:0 0 4px;font-size:1.35em}
+.fm-report .meta{color:var(--fm-muted,#666);margin:0 0 10px}
+.fm-report .plates{list-style:none;padding:0;margin:0 0 16px;display:flex;flex-wrap:wrap;gap:4px 16px;color:var(--fm-muted,#666)}
+.fm-report .plates b{color:var(--fm-fg,#222);font-weight:600}
+.fm-report .scroll{overflow-x:auto}
+.fm-report table{border-collapse:collapse}
+.fm-report td,.fm-report th{padding:6px 10px;border-bottom:1px solid var(--fm-line,#ddd);text-align:left;vertical-align:middle}
+.fm-report th{font-weight:600;white-space:nowrap}
+.fm-report .c{display:inline-block;width:56px;margin-right:2px;height:36px;border-radius:4px;border:1px solid var(--fm-chip-edge,#0002);vertical-align:middle}
+.fm-report .c.s{width:26px;height:18px;margin:0;flex:none}
+.fm-report .it{display:flex;align-items:center;gap:8px;margin:4px 0}
+.fm-report small{color:var(--fm-muted,#666)}
+.fm-report td:first-child,.fm-report td:nth-child(3){white-space:nowrap}
+.fm-report .ok{color:var(--fm-ok,#1a7f37);font-weight:600}
+.fm-report .mid{color:var(--fm-mid,#9a6700);font-weight:600}
+.fm-report .bad{color:var(--fm-bad,#cf222e);font-weight:600}
+.fm-report a{color:var(--fm-link,#0969da)}
+"""
+
+
+def report_fragment(project, rows, spools, threshold, skipped=None):
+    """The match report as an HTML fragment styled by REPORT_CSS."""
     e = html.escape
-    chip = lambda hx: f'<span class="c" style="background:{hx}"></span>'
-    out = [f"""<!doctype html><meta charset="utf-8"><title>{e(project['file'])} spool match</title>
-<style>body{{font:14px system-ui,sans-serif;margin:24px;color:#222}}table{{border-collapse:collapse}}
-td,th{{padding:6px 10px;border-bottom:1px solid #ddd;text-align:left;vertical-align:middle}}
-.c{{display:inline-block;width:56px;margin-right:2px;height:36px;border-radius:4px;border:1px solid #0002;vertical-align:middle}}
-.ok{{color:#1a7f37;font-weight:600}}.mid{{color:#9a6700;font-weight:600}}.bad{{color:#cf222e;font-weight:600}}
-small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['file'])}</h2><p><small>ΔE threshold {threshold}</small></p>
-<table><tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th><th>ΔE</th><th>Alt matches</th><th>Buy options</th></tr>"""]
+    chip = lambda hx, cls="c": f'<span class="{cls}" style="background:{hx}"></span>'
+    skip = f" ({skipped} skipped: multi-color/no hex/empty/excluded)" if skipped is not None else ""
+    plates = "".join(f"<li><b>Plate {e(str(pl['id']))}</b> {e(pl['name'])} · slots {', '.join(map(str, pl['slots']))}</li>"
+                     for pl in project["plates"])
+    out = [f'<div class="fm-report"><h2>{e(project["file"])}</h2>'
+           f'<p class="meta">{e(project["source"])} · {len(project["slots"])} slots, {len(rows)} used · '
+           f'{len(spools)} candidate filaments{skip} · ΔE threshold {threshold:g}</p>'
+           f'<ul class="plates">{plates}</ul><div class="scroll"><table>'
+           "<tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th>"
+           "<th>ΔE</th><th>Alt matches</th><th>Buy options</th></tr>"]
     for r in rows:
         tgt_hex = r["measured"][1] if r.get("measured") else r["hex"]
         if r["pick"]:
@@ -538,8 +574,8 @@ small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['
             cls = "ok" if rd <= threshold else ("mid" if rd <= 2 * threshold else "bad")
             mine = f"{chip(tgt_hex)}{chip(sp['hex'])}</td><td>{e(spool_label(sp))}{e(finish_note(sp))}<br><small>{sp['hex']} · {e(', '.join(sorted(sp['locations'])))}</small>"
             dcell = f'<span class="{cls}">{d:.1f}</span>'
-            alts = "<br>".join(
-                f'{chip(spools[j]["hex"])} {e(spool_label(spools[j]))} <small>{dd:.1f}</small>'
+            alts = "".join(
+                f'<div class="it">{chip(spools[j]["hex"], "c s")}<small>{e(spool_label(spools[j]))} {dd:.1f}</small></div>'
                 for dd, j in alt_candidates(r, k, d))
         else:
             mine, dcell, alts = f"{chip(tgt_hex)}</td><td>-", "-", ""
@@ -547,19 +583,184 @@ small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['
         if r.get("measured"):
             mid, mhex, msh = r["measured"]
             req += f'<br>measured <a href="https://filamentcolors.xyz/swatch/{mid}/">{mhex}</a> (ΔE {msh})'
-        buys = "<br>".join(
-            f'{chip(s["hex"])} <a href="https://filamentcolors.xyz/swatch/{s["id"]}/">{e(s["brand"])} {e(s["color"])}</a> <small>{dd:.1f}</small>'
+        buys = "".join(
+            f'<div class="it">{chip(s["hex"], "c s")}<span><a href="https://filamentcolors.xyz/swatch/{s["id"]}/">'
+            f'{e(s["brand"])} {e(s["color"])}</a> <small>{dd:.1f}</small></span></div>'
             for dd, s in r.get("suggest", []))
         out.append(f"<tr><td>{r['slot']}<br><small>plates {e(', '.join(r['used_on']))}</small></td>"
                    f"<td><small>{req}</small></td>"
-                   f"<td>{mine}</td><td>{dcell}</td><td><small>{alts}</small></td><td>{buys}</td></tr>")
-    out.append("</table>")
-    Path(path).write_text("\n".join(out), encoding="utf-8")
+                   f"<td>{mine}</td><td>{dcell}</td><td>{alts}</td><td>{buys}</td></tr>")
+    out.append("</table></div></div>")
+    return "\n".join(out)
+
+
+def report_document(project, rows, spools, threshold, skipped=None):
+    """A standalone HTML page wrapping report_fragment()."""
+    return (f'<!doctype html><meta charset="utf-8">'
+            f'<meta name="viewport" content="width=device-width,initial-scale=1">'
+            f'<title>{html.escape(project["file"])} spool match</title>'
+            f"<style>body{{font:14px system-ui,sans-serif;margin:24px}}\n{REPORT_CSS}</style>\n"
+            + report_fragment(project, rows, spools, threshold, skipped))
+
+
+def write_html(path, project, rows, spools, threshold, skipped=None):
+    Path(path).write_text(report_document(project, rows, spools, threshold, skipped), encoding="utf-8")
+
+
+def analyze(project, spools_path, a, swatches):
+    """The matching pipeline shared by the CLI and --serve. `a` carries the
+    option values (an argparse namespace); `project` gets measured targets
+    written into it. Returns (spools, skipped, rows, notes)."""
+    spools, skipped = load_spools(spools_path, a.min_grams, a.exclude.split(","))
+    notes = []
+    if a.measured and swatches:
+        used = sum(1 for s in project["slots"] if s["used_on"] and s["hex"])
+        n = apply_measured_targets(project, swatches, a.measured_tolerance)
+        notes.append(f"Measured target color from filamentcolors.xyz for {n}/{used} used slots "
+                     f"(requested hex for the rest).")
+    rows = match(project, spools, a.any_material, a.top, a.allow_reuse)
+    if a.suggest and swatches:
+        suggest(rows, swatches, a.brands.split(","), 3, a.threshold,
+                a.any_material, exclude=a.exclude.split(","))
+    return spools, skipped, rows, notes
+
+# ---------------------------------------------------------------------- web UI
+# Options the page can set, with the type used to parse them from the query string.
+WEB_OPTS = {"threshold": float, "top": int, "min_grams": float, "any_material": bool,
+            "allow_reuse": bool, "exclude": str, "suggest": bool, "brands": str,
+            "measured": bool, "measured_tolerance": float}
+MAX_UPLOAD = 512 * 1024 * 1024
+
+
+def serve(a):
+    """Serve web/index.html plus a small JSON API around analyze(). Bound to
+    127.0.0.1 only; holds one project and one inventory at a time. Options
+    given on the command line become the page's defaults."""
+    import copy, http.server, tempfile, threading, webbrowser
+    from urllib.parse import parse_qs, urlparse
+
+    page = Path(__file__).resolve().parent / "web" / "index.html"
+    if not page.exists():
+        sys.exit(f"Web UI not found: {page}")
+    tmp = tempfile.TemporaryDirectory(prefix="filmatch-")
+    defaults = {k: getattr(a, k) for k in WEB_OPTS}
+    state = {"project": None, "spools": None, "spools_name": None, "swatches": None}
+    lock = threading.Lock()
+    if Path(a.spools).exists():
+        state["spools"], state["spools_name"] = Path(a.spools).resolve(), Path(a.spools).name
+    if a.project:
+        state["project"] = read_project(a.project)
+
+    def swatch_library():
+        with lock:  # the first call may download the library; never do it twice at once
+            if state["swatches"] is None:
+                state["swatches"] = load_filamentcolors(a.refresh)
+            return state["swatches"]
+
+    def info():
+        p = state["project"]
+        return {"spools": state["spools_name"],
+                "project": p and {"file": p["file"], "slots": len(p["slots"]),
+                                  "used": sum(1 for s in p["slots"] if s["used_on"] and s["hex"])}}
+
+    class Handler(http.server.BaseHTTPRequestHandler):
+        def log_message(self, *args):
+            pass
+
+        def send(self, body, ctype="application/json", code=200):
+            data = (json.dumps(body) if ctype == "application/json" else body).encode("utf-8")
+            self.send_response(code)
+            self.send_header("Content-Type", f"{ctype}; charset=utf-8")
+            self.send_header("Content-Length", str(len(data)))
+            self.send_header("Cache-Control", "no-store")
+            self.end_headers()
+            self.wfile.write(data)
+
+        def body(self):
+            n = int(self.headers.get("Content-Length") or 0)
+            if n > MAX_UPLOAD:
+                raise FilmatchError("File too large.")
+            return self.rfile.read(n)
+
+        def do_GET(self):
+            self.route("GET")
+
+        def do_POST(self):
+            self.route("POST")
+
+        def route(self, method):
+            url = urlparse(self.path)
+            q = {k: v[0] for k, v in parse_qs(url.query, keep_blank_values=True).items()}
+            try:
+                if method == "GET" and url.path == "/":
+                    cfg = {"defaults": defaults, "finishes": [f.title() for f in SPECIAL_FINISHES], **info()}
+                    self.send(page.read_text(encoding="utf-8").replace(
+                        "/*__FILMATCH_CONFIG__*/null", json.dumps(cfg).replace("</", "<\\/")), "text/html")
+                elif method == "GET" and url.path == "/report.css":
+                    self.send(REPORT_CSS, "text/css")
+                elif method == "POST" and url.path == "/project":
+                    name = Path(q.get("name") or "project.3mf").name
+                    state["project"] = read_project(io.BytesIO(self.body()), name)
+                    self.send(info())
+                elif method == "POST" and url.path == "/spools":
+                    name = Path(q.get("name") or "spools.json").name
+                    dest = Path(tmp.name) / ("spools" + (Path(name).suffix.lower() or ".json"))
+                    dest.write_bytes(self.body())
+                    load_spools(dest)  # validate before accepting it
+                    state["spools"], state["spools_name"] = dest, name
+                    self.send(info())
+                elif method == "GET" and url.path == "/analyze":
+                    self.send(self.analyze(q))
+                else:
+                    self.send({"error": "not found"}, code=404)
+            except (BrokenPipeError, ConnectionResetError):
+                pass  # the page aborted a superseded request
+            except (FilmatchError, zipfile.BadZipFile, ValueError, KeyError, OSError) as ex:
+                self.send({"error": str(ex) or type(ex).__name__}, code=400)
+            except Exception as ex:
+                self.send({"error": f"{type(ex).__name__}: {ex}"}, code=500)
+
+        def analyze(self, q):
+            if not state["project"]:
+                raise FilmatchError("Drop a .3mf project to analyze.")
+            if not state["spools"]:
+                raise FilmatchError("No spool inventory loaded. Drop your my-spools.json (or .csv).")
+            opts = argparse.Namespace(**defaults)
+            for k, typ in WEB_OPTS.items():
+                if k in q:
+                    setattr(opts, k, q[k] in ("1", "true", "on") if typ is bool else typ(q[k]))
+            swatches, notes = None, []
+            if opts.measured or opts.suggest:
+                try:
+                    swatches = swatch_library()
+                except (urllib.error.URLError, OSError) as ex:
+                    notes.append(f"filamentcolors.xyz unavailable: {ex}")
+            project = copy.deepcopy(state["project"])
+            spools, skipped, rows, more = analyze(project, state["spools"], opts, swatches)
+            args = (project, rows, spools, opts.threshold, skipped)
+            return {"notes": notes + more, "file": project["file"],
+                    "fragment": report_fragment(*args), "document": report_document(*args)}
+
+    try:
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
+    except OSError:  # port taken: let the OS pick a free one
+        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+    print(f"filmatch web UI: {url}  (Ctrl+C to stop)", file=sys.stderr)
+    if not a.no_browser:
+        threading.Timer(0.3, webbrowser.open, (url,)).start()
+    try:
+        httpd.serve_forever()
+    except KeyboardInterrupt:
+        pass
+    finally:
+        httpd.server_close()
+        tmp.cleanup()
 
 # --------------------------------------------------------------------- main
-def main():
+def build_parser():
     ap = argparse.ArgumentParser(description="Match 3MF filament colors to your spools (CIEDE2000).")
-    ap.add_argument("project", help=".3mf file")
+    ap.add_argument("project", nargs="?", help=".3mf file (optional with --serve, which preloads it)")
     ap.add_argument("--spools", default="my-spools.json",
                     help="3DFilamentProfiles export (.json or .csv; default: my-spools.json)")
     ap.add_argument("--threshold", type=float, default=5.0, help="ΔE you consider a match (default 5)")
@@ -579,12 +780,25 @@ def main():
     ap.add_argument("--refresh", action="store_true", help="re-download the filamentcolors.xyz cache")
     ap.add_argument("--html", help="also write a visual HTML report")
     ap.add_argument("--no-color", action="store_true", help="no terminal color chips")
-    a = ap.parse_args()
+    ap.add_argument("--serve", action="store_true", help="run the drag-and-drop web UI on localhost")
+    ap.add_argument("--port", type=int, default=8765, help="port for --serve (default 8765)")
+    ap.add_argument("--no-browser", action="store_true", help="with --serve, don't open a browser tab")
+    return ap
 
-    if not Path(a.spools).exists():
-        sys.exit(f"Spool inventory not found: {a.spools}  (pass --spools <file>)")
-    project = read_project(a.project)
-    spools, skipped = load_spools(a.spools, a.min_grams, a.exclude.split(","))
+
+def main():
+    ap = build_parser()
+    a = ap.parse_args()
+    try:
+        if a.serve:
+            return serve(a)
+        if not a.project:
+            ap.error("the project .3mf is required (or use --serve)")
+        if not Path(a.spools).exists():
+            sys.exit(f"Spool inventory not found: {a.spools}  (pass --spools <file>)")
+        project = read_project(a.project)
+    except (FilmatchError, zipfile.BadZipFile) as ex:
+        sys.exit(f"{a.project}: {ex}")
 
     swatches = None
     if a.measured or a.suggest:
@@ -592,20 +806,13 @@ def main():
             swatches = load_filamentcolors(a.refresh)
         except (urllib.error.URLError, OSError) as ex:
             print(f"(filamentcolors.xyz unavailable: {ex})", file=sys.stderr)
-    if a.measured and swatches:
-        used = sum(1 for s in project["slots"] if s["used_on"] and s["hex"])
-        n = apply_measured_targets(project, swatches, a.measured_tolerance)
-        print(f"Measured target color from filamentcolors.xyz for {n}/{used} used slots "
-              f"(requested hex for the rest).", file=sys.stderr)
-
-    rows = match(project, spools, a.any_material, a.top, a.allow_reuse)
-    if a.suggest and swatches:
-        suggest(rows, swatches, a.brands.split(","), 3, a.threshold,
-                a.any_material, exclude=a.exclude.split(","))
+    spools, skipped, rows, notes = analyze(project, a.spools, a, swatches)
+    for note in notes:
+        print(note, file=sys.stderr)
     color = not a.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None
     print_report(project, rows, spools, a.threshold, color, skipped)
     if a.html:
-        write_html(a.html, project, rows, spools, a.threshold)
+        write_html(a.html, project, rows, spools, a.threshold, skipped)
         print(f"HTML report: {a.html}")
 
 
