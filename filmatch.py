@@ -472,6 +472,12 @@ def spool_label(sp):
     return f"{sp['brand']} {sp['material']} {sp['finish']} {sp['color']}{extra}".replace("  ", " ")
 
 
+def alt_candidates(r, k, limit=2):
+    """Ranked candidates other than the picked spool, closest first, capped at
+    `limit` (there may be fewer if --top left little else to rank)."""
+    return [(dd, j) for dd, j in r["ranked"] if j != k][:limit]
+
+
 def print_report(project, rows, spools, threshold, color, skipped):
     print(f"\n{project['file']}  ({project['source']})")
     print(f"{len(project['slots'])} slots, {len(rows)} used, {len(spools)} candidate filaments "
@@ -496,7 +502,8 @@ def print_report(project, rows, spools, threshold, color, skipped):
         if best_k != k:
             print(f"          (nearest was {spools[best_k]['color']} ΔE {best_d:.1f}, "
                   f"but it's assigned to another slot)")
-        alts = [f"{spools[j]['brand']} {spools[j]['finish']} {spools[j]['color']} {dd:.1f}" for dd, j in r["ranked"] if j != k][:2]
+        alts = [f"{spools[j]['brand']} {spools[j]['finish']} {spools[j]['color']} {dd:.1f}"
+                for dd, j in alt_candidates(r, k)]
         if alts:
             print(f"          alt: {' | '.join(alts)}")
         for dd, s in r.get("suggest", []):
@@ -514,7 +521,7 @@ td,th{{padding:6px 10px;border-bottom:1px solid #ddd;text-align:left;vertical-al
 .c{{display:inline-block;width:56px;margin-right:2px;height:36px;border-radius:4px;border:1px solid #0002;vertical-align:middle}}
 .ok{{color:#1a7f37;font-weight:600}}.mid{{color:#9a6700;font-weight:600}}.bad{{color:#cf222e;font-weight:600}}
 small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['file'])}</h2><p><small>ΔE threshold {threshold}</small></p>
-<table><tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th><th>ΔE</th><th>Buy options</th></tr>"""]
+<table><tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th><th>ΔE</th><th>Alt matches</th><th>Buy options</th></tr>"""]
     for r in rows:
         tgt_hex = r["measured"][1] if r.get("measured") else r["hex"]
         if r["pick"]:
@@ -523,8 +530,11 @@ small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['
             cls = "ok" if rd <= threshold else ("mid" if rd <= 2 * threshold else "bad")
             mine = f"{chip(tgt_hex)}{chip(sp['hex'])}</td><td>{e(spool_label(sp))}{e(finish_note(sp))}<br><small>{sp['hex']} · {e(', '.join(sorted(sp['locations'])))}</small>"
             dcell = f'<span class="{cls}">{d:.1f}</span>'
+            alts = "<br>".join(
+                f'{chip(spools[j]["hex"])} {e(spool_label(spools[j]))} <small>{dd:.1f}</small>'
+                for dd, j in alt_candidates(r, k))
         else:
-            mine, dcell = f"{chip(tgt_hex)}</td><td>-", "-"
+            mine, dcell, alts = f"{chip(tgt_hex)}</td><td>-", "-", ""
         req = f"{r['hex']}<br>{e(r['profile'])}"
         if r.get("measured"):
             mid, mhex, msh = r["measured"]
@@ -534,7 +544,7 @@ small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['
             for dd, s in r.get("suggest", []))
         out.append(f"<tr><td>{r['slot']}<br><small>plates {e(', '.join(r['used_on']))}</small></td>"
                    f"<td><small>{req}</small></td>"
-                   f"<td>{mine}</td><td>{dcell}</td><td>{buys}</td></tr>")
+                   f"<td>{mine}</td><td>{dcell}</td><td><small>{alts}</small></td><td>{buys}</td></tr>")
     out.append("</table>")
     Path(path).write_text("\n".join(out), encoding="utf-8")
 
