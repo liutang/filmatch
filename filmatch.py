@@ -476,9 +476,13 @@ def spool_label(sp):
     return f"{sp['brand']} {sp['material']} {sp['finish']} {sp['color']}{extra}".replace("  ", " ")
 
 
-def alt_candidates(r, k):
+def alt_candidates(r, k, pick_d):
     """Ranked candidates other than the picked spool, closest first. `r["ranked"]`
-    is already sized to --top alternates plus the pick, so no further cap here."""
+    is already sized to --top alternates plus the pick, so no further cap here.
+    None when the pick is already an exact (ΔE 0) match -- an alt is never
+    worth showing once you own the color outright."""
+    if round(pick_d, 1) == 0:
+        return []
     return [(dd, j) for dd, j in r["ranked"] if j != k]
 
 
@@ -507,7 +511,7 @@ def print_report(project, rows, spools, threshold, color, skipped):
             print(f"          (nearest was {spools[best_k]['color']} ΔE {best_d:.1f}, "
                   f"but it's assigned to another slot)")
         alts = [f"{spools[j]['brand']} {spools[j]['finish']} {spools[j]['color']} {dd:.1f}"
-                for dd, j in alt_candidates(r, k)]
+                for dd, j in alt_candidates(r, k, d)]
         if alts:
             print(f"          alt: {' | '.join(alts)}")
         for dd, s in r.get("suggest", []):
@@ -536,7 +540,7 @@ small{{color:#666}}td:nth-child(3){{white-space:nowrap}}</style><h2>{e(project['
             dcell = f'<span class="{cls}">{d:.1f}</span>'
             alts = "<br>".join(
                 f'{chip(spools[j]["hex"])} {e(spool_label(spools[j]))} <small>{dd:.1f}</small>'
-                for dd, j in alt_candidates(r, k))
+                for dd, j in alt_candidates(r, k, d))
         else:
             mine, dcell, alts = f"{chip(tgt_hex)}</td><td>-", "-", ""
         req = f"{r['hex']}<br>{e(r['profile'])}"
