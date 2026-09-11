@@ -65,7 +65,7 @@ python3 filmatch.py Project.3mf --spools other.json --html report.html
 | `project` | — | the `.3mf` file (required) |
 | `--spools FILE` | `my-spools.json` | 3DFilamentProfiles export, `.json` or `.csv` |
 | `--threshold N` | `5.0` | ΔE at or below which a match is "OK" |
-| `--top N` | `3` | inventory candidates to weigh / show per slot |
+| `--top N` | `2` | alternate spools to show per slot, in addition to the pick |
 | `--any-material` | off | don't restrict matches to the slot's material family |
 | `--allow-reuse` | off | let two slots map to the same spool |
 | `--exclude LIST` | `Translucent,Glow,Silk` | comma list of finishes to ignore (`''` for none) |

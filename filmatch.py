@@ -314,7 +314,11 @@ def hungarian(cost):
     return ans
 
 
-def match(project, spools, any_material=False, top=3, allow_reuse=False):
+def match(project, spools, any_material=False, top=2, allow_reuse=False):
+    """`top` is the number of alternates to keep per slot in addition to the
+    pick, so `ranked` holds up to `top + 1` candidates (assignment quality is
+    unaffected: the Hungarian solver below uses the full `all` distances,
+    never the `ranked` slice)."""
     rows = []
     for s in project["slots"]:
         if not s["used_on"] or not s["hex"]:
@@ -325,7 +329,7 @@ def match(project, spools, any_material=False, top=3, allow_reuse=False):
             ((de2000(lab, sp["lab"]), k) for k, sp in enumerate(spools)
              if any_material or not fam or family(sp["material"]) == fam),
             key=lambda t: t[0])
-        rows.append({**s, "lab": lab, "ranked": ranked[:max(top, 1)], "all": dict((k, d) for d, k in ranked)})
+        rows.append({**s, "lab": lab, "ranked": ranked[:max(top, 0) + 1], "all": dict((k, d) for d, k in ranked)})
 
     for r in rows:
         r["pick"] = r["ranked"][0] if r["ranked"] else None
@@ -472,10 +476,10 @@ def spool_label(sp):
     return f"{sp['brand']} {sp['material']} {sp['finish']} {sp['color']}{extra}".replace("  ", " ")
 
 
-def alt_candidates(r, k, limit=2):
-    """Ranked candidates other than the picked spool, closest first, capped at
-    `limit` (there may be fewer if --top left little else to rank)."""
-    return [(dd, j) for dd, j in r["ranked"] if j != k][:limit]
+def alt_candidates(r, k):
+    """Ranked candidates other than the picked spool, closest first. `r["ranked"]`
+    is already sized to --top alternates plus the pick, so no further cap here."""
+    return [(dd, j) for dd, j in r["ranked"] if j != k]
 
 
 def print_report(project, rows, spools, threshold, color, skipped):
@@ -555,7 +559,8 @@ def main():
     ap.add_argument("--spools", default="my-spools.json",
                     help="3DFilamentProfiles export (.json or .csv; default: my-spools.json)")
     ap.add_argument("--threshold", type=float, default=5.0, help="ΔE you consider a match (default 5)")
-    ap.add_argument("--top", type=int, default=3, help="inventory candidates to consider/show per slot")
+    ap.add_argument("--top", type=int, default=2,
+                    help="alternate spools to show per slot in addition to the pick (default 2)")
     ap.add_argument("--any-material", action="store_true", help="don't restrict to the slot's material family")
     ap.add_argument("--allow-reuse", action="store_true", help="let two slots map to the same spool")
     ap.add_argument("--exclude", default="Translucent,Glow,Silk",
@@ -589,7 +594,7 @@ def main():
         print(f"Measured target color from filamentcolors.xyz for {n}/{used} used slots "
               f"(requested hex for the rest).", file=sys.stderr)
 
-    rows = match(project, spools, a.any_material, max(a.top, 3), a.allow_reuse)
+    rows = match(project, spools, a.any_material, a.top, a.allow_reuse)
     if a.suggest and swatches:
         suggest(rows, swatches, a.brands.split(","), 3, a.threshold,
                 a.any_material, exclude=a.exclude.split(","))
