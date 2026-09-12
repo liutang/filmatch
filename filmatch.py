@@ -582,10 +582,11 @@ def report_fragment(project, rows, spools, threshold, skipped=None):
         req = f"{r['hex']}<br>{e(r['profile'])}"
         if r.get("measured"):
             mid, mhex, msh = r["measured"]
-            req += f'<br>measured <a href="https://filamentcolors.xyz/swatch/{mid}/">{mhex}</a> (ΔE {msh})'
+            req += (f'<br>measured <a href="https://filamentcolors.xyz/swatch/{mid}/"'
+                    f' target="_blank" rel="noopener">{mhex}</a> (ΔE {msh})')
         buys = "".join(
-            f'<div class="it">{chip(s["hex"], "c s")}<span><a href="https://filamentcolors.xyz/swatch/{s["id"]}/">'
-            f'{e(s["brand"])} {e(s["color"])}</a> <small>{dd:.1f}</small></span></div>'
+            f'<div class="it">{chip(s["hex"], "c s")}<span><a href="https://filamentcolors.xyz/swatch/{s["id"]}/"'
+            f' target="_blank" rel="noopener">{e(s["brand"])} {e(s["color"])}</a> <small>{dd:.1f}</small></span></div>'
             for dd, s in r.get("suggest", []))
         out.append(f"<tr><td>{r['slot']}<br><small>plates {e(', '.join(r['used_on']))}</small></td>"
                    f"<td><small>{req}</small></td>"
