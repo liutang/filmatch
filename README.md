@@ -106,6 +106,51 @@ The analysis runs in the same Python code as the CLI, not in the browser, so
 the two always agree. filamentcolors.xyz sits behind Cloudflare and sends no
 CORS headers, so a page running only in the browser couldn't query it anyway.
 
+## Self-hosting with Docker
+
+The image is standard library only, so there is nothing to install in it.
+
+```sh
+mkdir -p data && cp my-spools.json data/
+docker compose up -d          # http://<your-host>:8765/
+```
+
+`./data` is the only volume:
+
+| Path | What it holds |
+| --- | --- |
+| `data/my-spools.json` | your inventory, loaded at startup |
+| `data/cache/` | the filamentcolors.xyz swatch library, so a restart doesn't re-download it |
+
+To change inventory permanently, replace `data/my-spools.json` and restart.
+Dropping a `.json`/`.csv` on the page still works, but it applies to the running
+container only and is lost on restart, so the mounted file stays the source of
+truth.
+
+Extra flags are appended to the entrypoint, and a later flag wins, so compose can
+override defaults without repeating the command:
+
+```yaml
+command: ["--suggest", "--include", "silk"]
+```
+
+Without compose:
+
+```sh
+docker build -t filmatch .
+docker run -d --name filmatch -p 8765:8765 -v "$PWD/data:/data" filmatch
+```
+
+The image runs as uid 1000 and needs to write `data/cache`; if your host
+directory is owned by someone else, set `user:` in compose (or `chown` the
+directory) or the swatch cache can't be written.
+
+**There is no authentication.** Anyone who can reach the port can upload a
+project, read your inventory, and make the server fetch from filamentcolors.xyz.
+Keep it on your LAN or behind a reverse proxy / VPN that does the auth. Related:
+the server holds one project and one inventory at a time, so two people using it
+at once will overwrite each other's uploads — it's built for one user.
+
 ## Reading the output
 
 ```

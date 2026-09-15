@@ -1,0 +1,19 @@
+services:
+  filmatch:
+    build: .
+    image: filmatch:latest
+    container_name: filmatch
+    restart: unless-stopped
+    ports:
+      - "8765:8765"
+    volumes:
+      # Put your spool export at ./data/my-spools.json. The swatch cache is
+      # written to ./data/cache, so restarts don't re-download it.
+      - ./data:/data
+    # The image runs as uid 1000. If ./data is owned by a different user on the
+    # host, set that uid here (and make sure it can write ./data/cache).
+    # user: "1000:1000"
+
+    # Optional flags, appended to the image's entrypoint. For example, turn buy
+    # suggestions on by default, or allow silk back into matches:
+    # command: ["--suggest", "--include", "silk"]

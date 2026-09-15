@@ -753,13 +753,21 @@ def serve(a):
             return {"notes": notes + more, "file": project["file"],
                     "fragment": report_fragment(*args), "document": report_document(*args)}
 
+    port = 8765 if a.port is None else a.port
     try:
-        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", a.port), Handler)
-    except OSError:  # port taken: let the OS pick a free one
-        httpd = http.server.ThreadingHTTPServer(("127.0.0.1", 0), Handler)
-    url = f"http://127.0.0.1:{httpd.server_address[1]}/"
+        httpd = http.server.ThreadingHTTPServer((a.host, port), Handler)
+    except OSError as ex:
+        if a.port is not None:  # an explicit --port must not move silently: a
+            sys.exit(f"Cannot bind {a.host}:{port}: {ex}")  # published port would break
+        httpd = http.server.ThreadingHTTPServer((a.host, 0), Handler)
+    port = httpd.server_address[1]
+    loopback = a.host not in ("0.0.0.0", "::", "")
+    url = f"http://{a.host if loopback else '127.0.0.1'}:{port}/"
     print(f"filmatch web UI: {url}  (Ctrl+C to stop)", file=sys.stderr)
-    if not a.no_browser:
+    if not loopback:
+        print(f"  bound to {a.host}:{port} -- also reachable at this host's own address",
+              file=sys.stderr)
+    if not a.no_browser and loopback:
         threading.Timer(0.3, webbrowser.open, (url,)).start()
     try:
         httpd.serve_forever()
@@ -794,7 +802,10 @@ def build_parser():
     ap.add_argument("--html", help="also write a visual HTML report")
     ap.add_argument("--no-color", action="store_true", help="no terminal color chips")
     ap.add_argument("--serve", action="store_true", help="run the drag-and-drop web UI on localhost")
-    ap.add_argument("--port", type=int, default=8765, help="port for --serve (default 8765)")
+    ap.add_argument("--host", default="127.0.0.1",
+                    help="address --serve binds (default 127.0.0.1; use 0.0.0.0 in a container)")
+    ap.add_argument("--port", type=int, default=None,
+                    help="port for --serve (default 8765; a free port is picked only when unset)")
     ap.add_argument("--no-browser", action="store_true", help="with --serve, don't open a browser tab")
     return ap
 
