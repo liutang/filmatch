@@ -108,7 +108,23 @@ CORS headers, so a page running only in the browser couldn't query it anyway.
 
 ## Self-hosting with Docker
 
-The image is standard library only, so there is nothing to install in it.
+The image is standard library only, so there is nothing to install in it. Every
+push to `main` publishes a multi-arch image (amd64 + arm64, so it runs on a NAS,
+a mini PC or a Pi) to GitHub Container Registry:
+
+```sh
+mkdir -p data && cp my-spools.json data/
+docker run -d --name filmatch -p 8765:8765 -v "$PWD/data:/data" \
+  ghcr.io/liutang/filmatch:latest
+```
+
+> **First publish only:** GHCR creates new packages **private**, and there is no
+> API to change that. Open the package page → *Package settings* → *Danger Zone*
+> → *Change visibility* → **Public**. To keep it private instead, run
+> `docker login ghcr.io -u <you>` with a token that has `read:packages` on the
+> machine doing the pull.
+
+Or build it yourself from a clone:
 
 ```sh
 mkdir -p data && cp my-spools.json data/

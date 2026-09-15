@@ -1,7 +1,10 @@
 services:
   filmatch:
+    # To run the published image instead of building from source, comment out
+    # `build:` and swap the `image:` line for the ghcr.io one.
     build: .
     image: filmatch:latest
+    # image: ghcr.io/liutang/filmatch:latest
     container_name: filmatch
     restart: unless-stopped
     ports:
