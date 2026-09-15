@@ -123,11 +123,40 @@ packages private; if a future package of yours lands private, flip it at the
 package page → *Package settings* → *Danger Zone* → *Change visibility*, or pull
 with `docker login ghcr.io -u <you>` using a token with `read:packages`.)
 
-Or build it yourself from a clone:
+Or with compose / Portainer — paste this as a stack, no paths to edit:
+
+```yaml
+services:
+  filmatch:
+    image: ghcr.io/liutang/filmatch:latest
+    container_name: filmatch
+    restart: unless-stopped
+    ports: ["8765:8765"]
+    volumes: ["filmatch-data:/data"]
+volumes:
+  filmatch-data:
+```
+
+**Don't give a Portainer stack a `build:` section.** A stack has no build context,
+and the build fails with a BuildKit error like `failed to list workers ... frame
+too large`. Pull the published image instead, as above.
+
+Getting your inventory into a named volume, once:
+
+```sh
+docker cp my-spools.json filmatch:/data/my-spools.json && docker restart filmatch
+```
+
+Dropping a `.json`/`.csv` on the page also works, but only for the running
+container. For a file you edit on the host, swap the named volume for an
+absolute bind mount (`/volume1/docker/filmatch:/data`) owned by uid 1000.
+
+To build from a clone instead:
 
 ```sh
 mkdir -p data && cp my-spools.json data/
-docker compose up -d          # http://<your-host>:8765/
+# edit docker-compose.yml: uncomment `build: .`, drop `image:`, use ./data:/data
+docker compose up -d
 ```
 
 `./data` is the only volume:

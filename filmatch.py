@@ -400,8 +400,11 @@ def load_filamentcolors(refresh=False, max_age_days=30):
         url = page.get("next")
         if url:
             time.sleep(2)  # be polite
-    cp.parent.mkdir(parents=True, exist_ok=True)
-    cp.write_text(json.dumps(out))
+    try:
+        cp.parent.mkdir(parents=True, exist_ok=True)
+        cp.write_text(json.dumps(out))
+    except OSError as ex:  # read-only or wrong-owner volume: re-download next
+        print(f"(could not cache swatches at {cp}: {ex})", file=sys.stderr)  # start
     return out
 
 
@@ -642,6 +645,10 @@ WEB_OPTS = {"threshold": float, "top": int, "min_grams": float, "any_material": 
             "allow_reuse": bool, "exclude": str, "suggest": bool, "brands": str,
             "measured": bool, "measured_tolerance": float}
 MAX_UPLOAD = 512 * 1024 * 1024
+# Anything else dropped in web/ (favicons, a manifest) is served as-is.
+STATIC_MIME = {".svg": "image/svg+xml", ".png": "image/png", ".ico": "image/x-icon",
+               ".webmanifest": "application/manifest+json", ".json": "application/json",
+               ".css": "text/css", ".js": "text/javascript", ".txt": "text/plain"}
 
 
 def serve(a):
@@ -680,9 +687,12 @@ def serve(a):
             pass
 
         def send(self, body, ctype="application/json", code=200):
-            data = (json.dumps(body) if ctype == "application/json" else body).encode("utf-8")
+            data = body if isinstance(body, bytes) else (
+                json.dumps(body) if ctype == "application/json" else body).encode("utf-8")
             self.send_response(code)
-            self.send_header("Content-Type", f"{ctype}; charset=utf-8")
+            # charset belongs on text we encoded, not on binary assets
+            self.send_header("Content-Type",
+                             ctype if isinstance(body, bytes) else f"{ctype}; charset=utf-8")
             self.send_header("Content-Length", str(len(data)))
             self.send_header("Cache-Control", "no-store")
             self.end_headers()
@@ -710,6 +720,14 @@ def serve(a):
                         "/*__FILMATCH_CONFIG__*/null", json.dumps(cfg).replace("</", "<\\/")), "text/html")
                 elif method == "GET" and url.path == "/report.css":
                     self.send(REPORT_CSS, "text/css")
+                elif method == "GET" and re.fullmatch(r"/[\w.-]+", url.path or "") \
+                        and (page.parent / url.path[1:]).is_file():
+                    asset = (page.parent / url.path[1:]).resolve()
+                    if asset.parent != page.parent.resolve():  # never escape web/
+                        self.send({"error": "not found"}, code=404)
+                    else:
+                        self.send(asset.read_bytes(),
+                                  STATIC_MIME.get(asset.suffix.lower(), "application/octet-stream"))
                 elif method == "POST" and url.path == "/project":
                     name = Path(q.get("name") or "project.3mf").name
                     state["project"] = read_project(io.BytesIO(self.body()), name)

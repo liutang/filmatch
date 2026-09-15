@@ -1,22 +1,24 @@
 services:
   filmatch:
-    # To run the published image instead of building from source, comment out
-    # `build:` and swap the `image:` line for the ghcr.io one.
-    build: .
-    image: filmatch:latest
-    # image: ghcr.io/liutang/filmatch:latest
+    image: ghcr.io/liutang/filmatch:latest
     container_name: filmatch
     restart: unless-stopped
     ports:
       - "8765:8765"
     volumes:
-      # Put your spool export at ./data/my-spools.json. The swatch cache is
-      # written to ./data/cache, so restarts don't re-download it.
-      - ./data:/data
-    # The image runs as uid 1000. If ./data is owned by a different user on the
-    # host, set that uid here (and make sure it can write ./data/cache).
-    # user: "1000:1000"
+      # A named volume deploys anywhere (Portainer included) with no path to
+      # edit. To keep my-spools.json on the host instead, replace this with an
+      # absolute bind mount, e.g. /volume1/docker/filmatch:/data, and make sure
+      # that directory is writable by uid 1000.
+      - filmatch-data:/data
 
-    # Optional flags, appended to the image's entrypoint. For example, turn buy
-    # suggestions on by default, or allow silk back into matches:
+    # Optional flags, appended to the image's entrypoint (a later flag wins):
     # command: ["--suggest", "--include", "silk"]
+
+    # To build from a clone rather than pull the published image, uncomment
+    # this and drop the `image:` line. Don't do this in a Portainer stack --
+    # it has no build context and the build will fail.
+    # build: .
+
+volumes:
+  filmatch-data:
