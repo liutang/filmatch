@@ -63,6 +63,7 @@ aside.panel { position: sticky; top: 16px; }
 .switch:checked::after { transform: translateX(16px); }
 .switch:focus-visible, .chip:focus-visible, .drop:focus-visible { outline: 2px solid var(--accent); outline-offset: 2px; }
 
+.hint { margin: 0 0 8px; color: var(--muted); font-size: 12px; }
 .chips { display: flex; flex-wrap: wrap; gap: 6px; }
 .chip { border: 1px solid var(--line); background: transparent; color: var(--fg); border-radius: 999px;
         padding: 3px 10px; font: inherit; font-size: 13px; cursor: pointer; }
@@ -161,7 +162,8 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
     </div>
 
     <div class="group">
-      <h3>Exclude finishes</h3>
+      <h3>Include finishes</h3>
+      <p class="hint">Specialty finishes are skipped by default. Click one to allow it.</p>
       <div class="chips" id="finishes"></div>
     </div>
 
@@ -187,7 +189,7 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
 const CFG = /*__FILMATCH_CONFIG__*/null;   // injected by `filmatch --serve`
 const DEF = CFG.defaults;
 const KEYS = Object.keys(DEF);
-const STORE = "filmatch.options.v1";
+const STORE = "filmatch.options.v2";   // v1 stored `exclude` under the old opt-out meaning
 const $ = id => document.getElementById(id);
 
 let opts = { ...DEF, ...stored() };
@@ -221,19 +223,22 @@ function syncControls() {
   renderChips();
 }
 
+// Chips are opt-ins: pressed means that finish is allowed into the results.
+// Any non-specialty finish someone excluded via the command line is preserved
+// untouched, since we only ever add or remove the clicked one.
 function renderChips() {
   const ex = excluded();
-  const names = [...CFG.finishes];
-  for (const e of ex) if (!names.some(n => n.toLowerCase() === e)) names.push(title(e));
-  $("finishes").replaceChildren(...names.map(name => {
+  $("finishes").replaceChildren(...CFG.finishes.map(name => {
+    const key = name.toLowerCase();
+    const included = !ex.has(key);
     const b = document.createElement("button");
     b.type = "button";
     b.className = "chip";
     b.textContent = name;
-    b.setAttribute("aria-pressed", String(ex.has(name.toLowerCase())));
+    b.setAttribute("aria-pressed", String(included));
     b.addEventListener("click", () => {
-      const s = excluded(), key = name.toLowerCase();
-      s.has(key) ? s.delete(key) : s.add(key);
+      const s = excluded();
+      included ? s.add(key) : s.delete(key);
       opts.exclude = [...s].map(title).join(",");
       changed(150);
     });
