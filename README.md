@@ -118,11 +118,10 @@ docker run -d --name filmatch -p 8765:8765 -v "$PWD/data:/data" \
   ghcr.io/liutang/filmatch:latest
 ```
 
-> **First publish only:** GHCR creates new packages **private**, and there is no
-> API to change that. Open the package page → *Package settings* → *Danger Zone*
-> → *Change visibility* → **Public**. To keep it private instead, run
-> `docker login ghcr.io -u <you>` with a token that has `read:packages` on the
-> machine doing the pull.
+The package is public, so the pull needs no login. (GHCR often creates new
+packages private; if a future package of yours lands private, flip it at the
+package page → *Package settings* → *Danger Zone* → *Change visibility*, or pull
+with `docker login ghcr.io -u <you>` using a token with `read:packages`.)
 
 Or build it yourself from a clone:
 
