@@ -90,8 +90,9 @@ filmatch --serve                 # or: python3 filmatch.py --serve
 
 Starts a local server on `127.0.0.1` and opens the page in your browser. Drop a
 `.3mf` anywhere on the window (or click the drop area) and the report appears
-below it. Every option is a slider or switch, and the report re-renders as you
-change them, so you can drag the ΔE threshold and watch grades change. You can
+below it. Every option is a switch, or a slider paired with a number box, so you
+can drag a value or type an exact one. The report re-renders as you change them,
+so you can sweep the ΔE threshold and watch grades change. You can
 also drop your spool export (`.json` / `.csv`) to swap inventories; by default
 the server uses `--spools` from where you started it. **Download HTML report**
 saves the same standalone file `--html` writes.

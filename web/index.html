@@ -45,9 +45,12 @@ aside.panel { position: sticky; top: 16px; }
 .row { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin: 10px 0; }
 .row label { flex: 1; cursor: pointer; }
 .range { margin: 10px 0; }
-.range .top { display: flex; justify-content: space-between; gap: 12px; }
-.range output { font-variant-numeric: tabular-nums; color: var(--muted); }
-.range input { width: 100%; margin: 6px 0 0; accent-color: var(--accent); }
+.range .top { display: flex; justify-content: space-between; align-items: center; gap: 12px; }
+.range .top label { line-height: 1.2; }
+.range input[type=range] { width: 100%; margin: 6px 0 0; accent-color: var(--accent); }
+.num { flex: none; width: 5.2em; padding: 3px 6px; border: 1px solid var(--line); border-radius: 6px;
+       background: var(--bg); color: var(--fg); font: inherit; font-variant-numeric: tabular-nums; text-align: right; }
+.num:focus { outline: 2px solid var(--accent); outline-offset: 1px; }
 .dim { opacity: .45; pointer-events: none; }
 
 /* on/off slider switch */
@@ -112,16 +115,25 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
     <div class="group">
       <h3>Matching</h3>
       <div class="range">
-        <div class="top"><label for="threshold">Match threshold (ΔE)</label><output for="threshold"></output></div>
-        <input type="range" id="threshold" min="0.5" max="15" step="0.5">
+        <div class="top">
+          <label for="threshold">Match threshold (ΔE)</label>
+          <input type="number" class="num" id="threshold-num" min="0.5" max="15" step="0.1" aria-label="Match threshold value">
+        </div>
+        <input type="range" id="threshold" min="0.5" max="15" step="0.1">
       </div>
       <div class="range">
-        <div class="top"><label for="top">Alternates per slot</label><output for="top"></output></div>
-        <input type="range" id="top" min="0" max="6" step="1">
+        <div class="top">
+          <label for="top">Alternates per slot</label>
+          <input type="number" class="num" id="top-num" min="0" max="10" step="1" aria-label="Alternates per slot value">
+        </div>
+        <input type="range" id="top" min="0" max="10" step="1">
       </div>
       <div class="range">
-        <div class="top"><label for="min_grams">Min grams remaining</label><output for="min_grams"></output></div>
-        <input type="range" id="min_grams" min="0" max="500" step="1">
+        <div class="top">
+          <label for="min_grams">Min grams remaining</label>
+          <input type="number" class="num" id="min_grams-num" min="0" max="1000" step="1" aria-label="Minimum grams remaining value">
+        </div>
+        <input type="range" id="min_grams" min="0" max="1000" step="1">
       </div>
       <div class="row"><label for="any_material">Any material family</label><input type="checkbox" class="switch" id="any_material"></div>
       <div class="row"><label for="allow_reuse">Allow spool reuse</label><input type="checkbox" class="switch" id="allow_reuse"></div>
@@ -131,8 +143,11 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
       <h3>Measured color</h3>
       <div class="row"><label for="measured">Use filamentcolors.xyz measurements</label><input type="checkbox" class="switch" id="measured"></div>
       <div class="range" id="measured-extra">
-        <div class="top"><label for="measured_tolerance">Tolerance (ΔE)</label><output for="measured_tolerance"></output></div>
-        <input type="range" id="measured_tolerance" min="0" max="10" step="0.5">
+        <div class="top">
+          <label for="measured_tolerance">Tolerance (ΔE)</label>
+          <input type="number" class="num" id="measured_tolerance-num" min="0" max="10" step="0.1" aria-label="Measured tolerance value">
+        </div>
+        <input type="range" id="measured_tolerance" min="0" max="10" step="0.1">
       </div>
     </div>
 
@@ -198,8 +213,8 @@ function syncControls() {
     if (!el) continue;
     if (el.type === "checkbox") el.checked = !!opts[k];
     else if (document.activeElement !== el) el.value = opts[k];
-    const out = document.querySelector(`output[for="${k}"]`);
-    if (out) out.textContent = fmt(k, opts[k]);
+    const num = $(k + "-num");            // don't fight the box being typed into
+    if (num && document.activeElement !== num) num.value = fmt(k, opts[k]);
   }
   $("measured-extra").classList.toggle("dim", !opts.measured);
   $("suggest-extra").classList.toggle("dim", !opts.suggest);
@@ -232,6 +247,28 @@ for (const k of KEYS) {
   el.addEventListener("input", () => {
     opts[k] = el.type === "checkbox" ? el.checked : el.type === "range" ? Number(el.value) : el.value;
     changed(el.type === "text" ? 500 : 200);
+  });
+
+  // Each slider is paired with a number box, so a value can be typed instead of
+  // dragged. A half-typed or out-of-range entry is left alone until Enter/blur,
+  // which clamps it rather than rejecting what was typed.
+  const num = $(k + "-num");
+  if (!num) continue;
+  const clamp = v => Math.min(Number(num.max), Math.max(Number(num.min), v));
+  num.addEventListener("input", () => {
+    const v = Number(num.value);
+    if (num.value.trim() !== "" && Number.isFinite(v) && v === clamp(v)) {
+      opts[k] = v;
+      changed(400);
+    }
+  });
+  num.addEventListener("blur", () => {
+    const v = Number(num.value);
+    if (num.value.trim() !== "" && Number.isFinite(v)) opts[k] = clamp(v);
+    changed(0);
+  });
+  num.addEventListener("keydown", e => {
+    if (e.key === "Enter") { e.preventDefault(); num.blur(); }
   });
 }
 
