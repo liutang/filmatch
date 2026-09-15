@@ -554,18 +554,16 @@ REPORT_CSS = """\
 
 
 def report_fragment(project, rows, spools, threshold, skipped=None):
-    """The match report as an HTML fragment styled by REPORT_CSS."""
+    """The match report as an HTML fragment styled by REPORT_CSS. The alt and buy
+    columns are built first and then dropped entirely when no row fills them --
+    with --top 0, with suggestions off, or when every slot already matched
+    exactly -- rather than leaving an empty column behind."""
     e = html.escape
     chip = lambda hx, cls="c": f'<span class="{cls}" style="background:{hx}"></span>'
     skip = f" ({skipped} skipped: multi-color/no hex/empty/excluded)" if skipped is not None else ""
     plates = "".join(f"<li><b>Plate {e(str(pl['id']))}</b> {e(pl['name'])} · slots {', '.join(map(str, pl['slots']))}</li>"
                      for pl in project["plates"])
-    out = [f'<div class="fm-report"><h2>{e(project["file"])}</h2>'
-           f'<p class="meta">{e(project["source"])} · {len(project["slots"])} slots, {len(rows)} used · '
-           f'{len(spools)} candidate filaments{skip} · ΔE threshold {threshold:g}</p>'
-           f'<ul class="plates">{plates}</ul><div class="scroll"><table>'
-           "<tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th>"
-           "<th>ΔE</th><th>Alt matches</th><th>Buy options</th></tr>"]
+    body = []
     for r in rows:
         tgt_hex = r["measured"][1] if r.get("measured") else r["hex"]
         if r["pick"]:
@@ -588,9 +586,22 @@ def report_fragment(project, rows, spools, threshold, skipped=None):
             f'<div class="it">{chip(s["hex"], "c s")}<span><a href="https://filamentcolors.xyz/swatch/{s["id"]}/"'
             f' target="_blank" rel="noopener">{e(s["brand"])} {e(s["color"])}</a> <small>{dd:.1f}</small></span></div>'
             for dd, s in r.get("suggest", []))
-        out.append(f"<tr><td>{r['slot']}<br><small>plates {e(', '.join(r['used_on']))}</small></td>"
-                   f"<td><small>{req}</small></td>"
-                   f"<td>{mine}</td><td>{dcell}</td><td>{alts}</td><td>{buys}</td></tr>")
+        body.append((f"<td>{r['slot']}<br><small>plates {e(', '.join(r['used_on']))}</small></td>"
+                     f"<td><small>{req}</small></td><td>{mine}</td><td>{dcell}</td>", alts, buys))
+
+    show_alts = any(alts for _, alts, _ in body)
+    show_buys = any(buys for _, _, buys in body)
+    out = [f'<div class="fm-report"><h2>{e(project["file"])}</h2>'
+           f'<p class="meta">{e(project["source"])} · {len(project["slots"])} slots, {len(rows)} used · '
+           f'{len(spools)} candidate filaments{skip} · ΔE threshold {threshold:g}</p>'
+           f'<ul class="plates">{plates}</ul><div class="scroll"><table>'
+           "<tr><th>Slot</th><th>Requested</th><th>Wanted · Yours</th><th>Your spool</th><th>ΔE</th>"
+           + ("<th>Alt matches</th>" if show_alts else "")
+           + ("<th>Buy options</th>" if show_buys else "") + "</tr>"]
+    for cells, alts, buys in body:
+        out.append("<tr>" + cells
+                   + (f"<td>{alts}</td>" if show_alts else "")
+                   + (f"<td>{buys}</td>" if show_buys else "") + "</tr>")
     out.append("</table></div></div>")
     return "\n".join(out)
 
