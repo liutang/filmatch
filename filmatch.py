@@ -769,10 +769,9 @@ def build_parser():
                     help="alternate spools to show per slot in addition to the pick (default 2)")
     ap.add_argument("--any-material", action="store_true", help="don't restrict to the slot's material family")
     ap.add_argument("--allow-reuse", action="store_true", help="let two slots map to the same spool")
-    ap.add_argument("--exclude", default=",".join(f.title() for f in SPECIAL_FINISHES),
-                    help="comma list of finishes to skip (default: every specialty finish; '' for none)")
     ap.add_argument("--include", default="",
-                    help="specialty finishes to allow back in, e.g. silk,satin")
+                    help="specialty finishes to allow back in -- every one is skipped by "
+                         "default, e.g. silk,satin; 'all' keeps them all")
     ap.add_argument("--min-grams", type=float, default=1, help="skip spools with less remaining")
     ap.add_argument("--suggest", action="store_true", help="suggest filaments to buy for slots above threshold")
     ap.add_argument("--brands", default="", help="limit suggestions, e.g. polymaker,bambu")
@@ -792,11 +791,12 @@ def build_parser():
 def main():
     ap = build_parser()
     a = ap.parse_args()
-    # --include subtracts from --exclude, so everything downstream (the CLI, the
-    # server, the page's defaults) sees a single resolved exclude list.
+    # Specialty finishes are always skipped unless --include names them. The
+    # resolved skip list is the one thing everything downstream reads: the
+    # matcher, the server, and the page, whose chips edit the same list.
     inc = {s.strip().lower() for s in a.include.split(",") if s.strip()}
-    a.exclude = ",".join(e.strip() for e in a.exclude.split(",")
-                         if e.strip() and e.strip().lower() not in inc)
+    a.exclude = "" if "all" in inc else ",".join(
+        f.title() for f in SPECIAL_FINISHES if f not in inc)
     try:
         if a.serve:
             return serve(a)

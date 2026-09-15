@@ -224,8 +224,8 @@ function syncControls() {
 }
 
 // Chips are opt-ins: pressed means that finish is allowed into the results.
-// Any non-specialty finish someone excluded via the command line is preserved
-// untouched, since we only ever add or remove the clicked one.
+// Only the clicked finish is ever added or removed, so anything else already in
+// the skip list is left untouched.
 function renderChips() {
   const ex = excluded();
   $("finishes").replaceChildren(...CFG.finishes.map(name => {

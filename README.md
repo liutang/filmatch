@@ -69,8 +69,7 @@ python3 filmatch.py Project.3mf --spools other.json --html report.html
 | `--top N` | `2` | alternate spools to show per slot, in addition to the pick |
 | `--any-material` | off | don't restrict matches to the slot's material family |
 | `--allow-reuse` | off | let two slots map to the same spool |
-| `--exclude LIST` | every specialty finish | comma list of finishes to skip (`''` for none) |
-| `--include LIST` | — | specialty finishes to allow back in, e.g. `silk,satin` |
+| `--include LIST` | — | specialty finishes to allow back in (silk, glitter, wood, …); every one is skipped by default. `all` keeps them all |
 | `--min-grams N` | `1` | skip spools with less remaining |
 | `--suggest` | off | list filaments to buy for slots above threshold |
 | `--brands LIST` | — | limit suggestions to these makers, e.g. `polymaker,bambu` |
