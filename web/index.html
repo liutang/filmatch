@@ -200,6 +200,7 @@ const $ = id => document.getElementById(id);
 let opts = { ...DEF, ...stored() };
 let loaded = { project: CFG.project, spools: CFG.spools };
 let lastDoc = "", lastFile = "", runId = 0, timer = 0, ctrl = null;
+let overrides = {};   // slot -> hex typed into the Requested column; cleared with each new project
 
 function stored() {
   try {
@@ -310,6 +311,8 @@ async function run() {
   ctrl = new AbortController();
   const q = new URLSearchParams();
   for (const k of KEYS) q.set(k, typeof opts[k] === "boolean" ? (opts[k] ? "1" : "0") : opts[k]);
+  const edits = Object.entries(overrides).map(([slot, hex]) => `${slot}:${hex.slice(1)}`);
+  if (edits.length) q.set("hex", edits.join(","));
   $("results").classList.add("stale");
   setStatus("busy", "Analyzing…");
   const slow = setTimeout(() => id === runId && setStatus("busy",
@@ -332,6 +335,34 @@ async function run() {
     clearTimeout(slow);
   }
 }
+
+// ---- requested color edits
+// The Requested hex in each row is an input, and the wanted swatch beside it is
+// a color picker. Committing either (Enter or blur; closing the picker)
+// re-matches that slot against the new color; a bad typed entry is flagged and
+// left for correction instead of being sent.
+function parseHex(text) {
+  let h = text.trim().replace(/^#/, "");
+  if (/^[0-9a-f]{3}$/i.test(h)) h = [...h].map(c => c + c).join("");
+  return /^[0-9a-f]{6}$/i.test(h) ? "#" + h.toUpperCase() : null;
+}
+
+$("report").addEventListener("change", e => {
+  const el = e.target;
+  if (!el.classList.contains("hexedit") && !el.classList.contains("hexpick")) return;
+  const hex = parseHex(el.value);
+  el.classList.toggle("bad", !hex);
+  el.title = hex ? "" : "Enter a 6-digit hex color, e.g. #1A2B3C";
+  if (!hex) return;
+  el.value = hex;
+  overrides[el.dataset.slot] = hex;
+  schedule(0);
+});
+$("report").addEventListener("click", e => {
+  if (!e.target.classList.contains("hexreset")) return;
+  delete overrides[e.target.dataset.slot];
+  schedule(0);
+});
 
 // ---- files
 function showLoaded() {
@@ -358,6 +389,7 @@ async function upload(file) {
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
   loaded = data;
+  if (kind === "project") overrides = {};
   showLoaded();
 }
 
