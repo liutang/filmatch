@@ -425,7 +425,7 @@ def apply_measured_targets(project, swatches, tol=3.0):
         by_vendor[_norm(sw["brand"])].append(sw)
     hits = 0
     for s in project["slots"]:
-        if not s["used_on"] or not s["hex"]:
+        if not s["used_on"] or not s["hex"] or s.get("hex_orig"):
             continue
         want = hex_to_lab(s["hex"])
         fam = family(s["type"])
@@ -440,6 +440,21 @@ def apply_measured_targets(project, swatches, tol=3.0):
             s["measured"] = (sw["id"], sw["hex"], round(shift, 1))
             hits += 1
     return hits
+
+
+def apply_hex_overrides(project, spec):
+    """Replace slots' requested hex from a 'slot:hex,slot:hex' string (the web UI's
+    editable Requested column). An overridden slot keeps the 3MF's color in
+    slot['hex_orig'] and is left out of measured-color refinement: a hand-typed
+    color is the target itself, not some vendor's nominal hex to look up."""
+    for item in (spec or "").split(","):
+        n, _, hx = item.partition(":")
+        n, hx = n.strip(), norm_hex(hx)
+        if not hx or not n.isdigit() or not 1 <= int(n) <= len(project["slots"]):
+            continue
+        s = project["slots"][int(n) - 1]
+        if s["hex"] and hx != s["hex"]:
+            s["hex_orig"], s["hex"] = s["hex"], hx
 
 
 def suggest(rows, swatches, brands=(), n=3, threshold=5.0, any_material=False,
@@ -553,14 +568,25 @@ REPORT_CSS = """\
 .fm-report .mid{color:var(--fm-mid,#9a6700);font-weight:600}
 .fm-report .bad{color:var(--fm-bad,#cf222e);font-weight:600}
 .fm-report a{color:var(--fm-link,#0969da)}
+.fm-report .hexedit{width:7.5em;padding:2px 5px;border:1px solid var(--fm-line,#ddd);border-radius:4px;background:transparent;color:var(--fm-fg,#222);font:inherit;font-family:ui-monospace,Menlo,Consolas,monospace}
+.fm-report .hexedit:focus{outline:2px solid var(--fm-link,#0969da);outline-offset:1px}
+.fm-report .hexedit.bad{border-color:var(--fm-bad,#cf222e);outline-color:var(--fm-bad,#cf222e)}
+.fm-report .hexpick{appearance:none;-webkit-appearance:none;padding:0;background:none;cursor:pointer;overflow:hidden}
+.fm-report .hexpick::-webkit-color-swatch-wrapper{padding:0}
+.fm-report .hexpick::-webkit-color-swatch{border:0;border-radius:0}
+.fm-report .hexpick::-moz-color-swatch{border:0;border-radius:0}
+.fm-report .hexpick:hover,.fm-report .hexpick:focus-visible{outline:2px solid var(--fm-link,#0969da);outline-offset:1px}
+.fm-report .hexreset{background:none;border:0;padding:0 0 0 4px;color:var(--fm-link,#0969da);font:inherit;cursor:pointer}
 """
 
 
-def report_fragment(project, rows, spools, threshold, skipped=None):
+def report_fragment(project, rows, spools, threshold, skipped=None, editable=False):
     """The match report as an HTML fragment styled by REPORT_CSS. The alt and buy
     columns are built first and then dropped entirely when no row fills them --
     with --top 0, with suggestions off, or when every slot already matched
-    exactly -- rather than leaving an empty column behind."""
+    exactly -- rather than leaving an empty column behind. `editable` renders each
+    requested hex as an input box, and each wanted swatch as a color picker, for
+    the --serve page to re-match on."""
     e = html.escape
     chip = lambda hx, cls="c": f'<span class="{cls}" style="background:{hx}"></span>'
     skip = f" ({skipped} skipped: multi-color/no hex/empty/excluded)" if skipped is not None else ""
@@ -569,18 +595,32 @@ def report_fragment(project, rows, spools, threshold, skipped=None):
     body = []
     for r in rows:
         tgt_hex = r["measured"][1] if r.get("measured") else r["hex"]
+        # Editable reports make the wanted swatch itself a native color picker.
+        wanted = (f'<input type="color" class="c hexpick" data-slot="{r["slot"]}" value="{tgt_hex.lower()}"'
+                  f' title="Pick a different color" aria-label="Pick the color for slot {r["slot"]}">'
+                  if editable else chip(tgt_hex))
         if r["pick"]:
             d, k = r["pick"]; sp = spools[k]
             rd = round(d, 1)
             cls = "ok" if rd <= threshold else ("mid" if rd <= 2 * threshold else "bad")
-            mine = f"{chip(tgt_hex)}{chip(sp['hex'])}</td><td>{e(spool_label(sp))}{e(finish_note(sp))}<br><small>{sp['hex']} · {e(', '.join(sorted(sp['locations'])))}</small>"
+            mine = f"{wanted}{chip(sp['hex'])}</td><td>{e(spool_label(sp))}{e(finish_note(sp))}<br><small>{sp['hex']} · {e(', '.join(sorted(sp['locations'])))}</small>"
             dcell = f'<span class="{cls}">{d:.1f}</span>'
             alts = "".join(
                 f'<div class="it">{chip(spools[j]["hex"], "c s")}<small>{e(spool_label(spools[j]))} {dd:.1f}</small></div>'
                 for dd, j in alt_candidates(r, k, d))
         else:
-            mine, dcell, alts = f"{chip(tgt_hex)}</td><td>-", "-", ""
-        req = f"{r['hex']}<br>{e(r['profile'])}"
+            mine, dcell, alts = f"{wanted}</td><td>-", "-", ""
+        orig = r.get("hex_orig")
+        if editable:
+            req = (f'<input type="text" class="hexedit" data-slot="{r["slot"]}" value="{r["hex"]}"'
+                   f' maxlength="7" spellcheck="false" autocomplete="off"'
+                   f' aria-label="Requested color for slot {r["slot"]}">')
+            if orig:
+                req += (f'<button type="button" class="hexreset" data-slot="{r["slot"]}"'
+                        f' title="Back to {orig} from the 3MF">reset</button>')
+        else:
+            req = r["hex"] + (f" (edited, was {orig})" if orig else "")
+        req += f"<br>{e(r['profile'])}"
         if r.get("measured"):
             mid, mhex, msh = r["measured"]
             req += (f'<br>measured <a href="https://filamentcolors.xyz/swatch/{mid}/"'
@@ -766,10 +806,12 @@ def serve(a):
                 except (urllib.error.URLError, OSError) as ex:
                     notes.append(f"filamentcolors.xyz unavailable: {ex}")
             project = copy.deepcopy(state["project"])
+            apply_hex_overrides(project, q.get("hex"))
             spools, skipped, rows, more = analyze(project, state["spools"], opts, swatches)
             args = (project, rows, spools, opts.threshold, skipped)
             return {"notes": notes + more, "file": project["file"],
-                    "fragment": report_fragment(*args), "document": report_document(*args)}
+                    "fragment": report_fragment(*args, editable=True),
+                    "document": report_document(*args)}
 
     port = 8765 if a.port is None else a.port
     try:

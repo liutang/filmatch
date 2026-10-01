@@ -97,6 +97,12 @@ also drop your spool export (`.json` / `.csv`) to swap inventories; by default
 the server uses `--spools` from where you started it. **Download HTML report**
 saves the same standalone file `--html` writes.
 
+The hex in the **Requested** column is an editable box: type a different color
+and press Enter to re-match that slot against it, or click the wanted swatch to
+choose one from a color picker. An edited slot is matched to
+exactly what you typed (no measured-color lookup); **reset** next to the box
+returns to the 3MF's color, and loading another project clears all edits.
+
 Flags passed with `--serve` become the page's defaults (for example,
 `filmatch --serve --suggest --threshold 3`), and a project path preloads it:
 `filmatch Project.3mf --serve`. Your slider settings are remembered in the
