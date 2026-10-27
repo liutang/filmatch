@@ -15,7 +15,9 @@ optional drag-and-drop web UI adds `web/index.html`.
   usage, including MMU-painted regions) and PrusaSlicer 3MFs (slot colors plus
   which slots are actually used).
 - **Reads your inventory.** A [3DFilamentProfiles](https://spooldb.com) *Export
-  My Spools* file, JSON or CSV. See [`my-spools.example.json`](my-spools.example.json).
+  My Spools* file, JSON or CSV (see [`my-spools.example.json`](my-spools.example.json)),
+  or your [Spoolman](https://github.com/Donkie/Spoolman) server. See
+  [Spoolman](#spoolman) below.
 - **Assigns spools to slots.** Each used slot is matched to its nearest spool by
   ΔE. By default one spool is not assigned to two slots (a Hungarian assignment
   minimizes total squared ΔE); pass `--allow-reuse` to drop that constraint.
@@ -57,6 +59,7 @@ ln -s "$PWD/filmatch.py" ~/.local/bin/filmatch
 python3 filmatch.py Project.3mf                       # --spools defaults to my-spools.json
 python3 filmatch.py Project.3mf --suggest --brands polymaker,bambu
 python3 filmatch.py Project.3mf --spools other.json --html report.html
+python3 filmatch.py Project.3mf --spoolman http://spoolman.local:7912
 ```
 
 ### Options
@@ -65,12 +68,13 @@ python3 filmatch.py Project.3mf --spools other.json --html report.html
 | --- | --- | --- |
 | `project` | — | the `.3mf` file (required) |
 | `--spools FILE` | `my-spools.json` | 3DFilamentProfiles export, `.json` or `.csv` |
+| `--spoolman URL` | `$SPOOLMAN_URL` | read spools from a Spoolman server instead of `--spools`; `''` turns it off |
 | `--threshold N` | `5.0` | ΔE at or below which a match is "OK" |
 | `--top N` | `2` | alternate spools to show per slot, in addition to the pick |
 | `--any-material` | off | don't restrict matches to the slot's material family |
 | `--allow-reuse` | off | let two slots map to the same spool |
 | `--include LIST` | — | specialty finishes to allow back in (silk, glitter, wood, …); every one is skipped by default. `all` keeps them all |
-| `--min-grams N` | `1` | skip spools with less remaining |
+| `--min-grams N` | `1` | skip spools with less remaining (spool exports only) |
 | `--suggest` | off | list filaments to buy for slots above threshold |
 | `--brands LIST` | — | limit suggestions to these makers, e.g. `polymaker,bambu` |
 | `--no-measured` | off | match the 3MF's requested hex as-is (skip filamentcolors.xyz lookup) |
@@ -81,6 +85,44 @@ python3 filmatch.py Project.3mf --spools other.json --html report.html
 | `--serve` | off | run the drag-and-drop web UI on localhost (see below) |
 | `--port N` | `8765` | port for `--serve` (falls back to a free port if taken) |
 | `--no-browser` | off | with `--serve`, don't open a browser tab |
+
+## Spoolman
+
+Point filmatch at a Spoolman server with `--spoolman URL` or the
+`SPOOLMAN_URL` environment variable. The address works with or without
+`/api/v1`. filmatch reads the spool list on each run, and the web UI reuses it
+for 30 seconds, so changes you make in Spoolman show up without a restart.
+Spoolman doesn't need a CORS setting for this, because the request comes
+from filmatch's server rather than from the browser.
+
+filmatch uses only Spoolman's standard fields, not custom extra fields, so it
+works with any Spoolman install:
+
+| filmatch | Spoolman |
+| --- | --- |
+| brand | filament vendor |
+| material | filament material |
+| color and label | filament name |
+| hex | filament color (single-color filaments only) |
+| location | spool location |
+
+- **Only single-color filaments are matched.** Spools of multi-color filaments,
+  and spools with no color set, are skipped and counted as skipped in the report.
+- **Remaining weight is ignored.** filmatch matches colors, and every spool
+  Spoolman lists counts. Archived spools are left out by Spoolman itself.
+  `--min-grams` applies to spool exports only.
+- **Finishes are guessed from the filament name.** Spoolman has no finish
+  field, so a specialty finish is recognized from a word in the name: "Silk
+  Gold" is silk, "Glitter Galaxy Black" is glitter and galaxy. A name that
+  says *basic* or *matte* counts as a plain finish whatever else it says, so
+  "Basic Wood Colour" and "Matte Wood Brown" are matched normally.
+
+> **This can give false positives.** It's a technical limitation: Spoolman
+> doesn't store a finish, so a color name that happens to contain a finish
+> word, such as "Wood Brown" or "Galaxy Black", is taken as that finish and
+> skipped. If a spool you expected is missing, include that finish
+> (`--include wood`, or its chip in the web UI). The report also notes when
+> finishes were guessed.
 
 ## Web UI
 
@@ -94,8 +136,15 @@ below it. Every option is a switch, or a slider paired with a number box, so you
 can drag a value or type an exact one. The report re-renders as you change them,
 so you can sweep the ΔE threshold and watch grades change. You can
 also drop your spool export (`.json` / `.csv`) to swap inventories; by default
-the server uses `--spools` from where you started it. **Download HTML report**
-saves the same standalone file `--html` writes.
+the server uses `--spoolman` if set, otherwise `--spools` from where you started
+it. The inventory's name is a link: it opens Spoolman, or the loaded file, in a
+new tab. On Spoolman, **Replace…** asks for another Spoolman address, which is
+used once it answers; a spool file can still be dropped on the window. After you
+drop a file, **Use Spoolman** switches back to the server.
+The min grams slider is hidden while Spoolman is the inventory. **Download HTML report**
+saves the same standalone file `--html` writes. **Reload filamentcolors.xyz
+library**, at the bottom of the options, downloads the swatch library again
+(like `--refresh`) and shows when the cached copy was downloaded.
 
 The hex in the **Requested** column is an editable box: type a different color
 and press Enter to re-match that slot against it, or click the wanted swatch to
@@ -177,6 +226,14 @@ Dropping a `.json`/`.csv` on the page still works, but it applies to the running
 container only and is lost on restart, so the mounted file stays the source of
 truth.
 
+To use Spoolman instead of a spool file, set `SPOOLMAN_URL`. It takes over from
+the image's `--spools /data/my-spools.json`:
+
+```yaml
+    environment:
+      SPOOLMAN_URL: http://spoolman:7912
+```
+
 Extra flags are appended to the entrypoint, and a later flag wins, so compose can
 override defaults without repeating the command:
 
@@ -196,7 +253,8 @@ directory is owned by someone else, set `user:` in compose (or `chown` the
 directory) or the swatch cache can't be written.
 
 **There is no authentication.** Anyone who can reach the port can upload a
-project, read your inventory, and make the server fetch from filamentcolors.xyz.
+project, read your inventory, make the server fetch from filamentcolors.xyz,
+and, when Spoolman is set up, point it at another Spoolman address.
 Keep it on your LAN or behind a reverse proxy / VPN that does the auth. Related:
 the server holds one project and one inventory at a time, so two people using it
 at once will overwrite each other's uploads — it's built for one user.

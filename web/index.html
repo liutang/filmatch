@@ -79,6 +79,10 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
 .inv { display: flex; justify-content: space-between; align-items: baseline; gap: 8px; }
 .inv span { overflow-wrap: anywhere; }
 .inv span.missing { color: var(--fm-bad); }
+.inv a { color: var(--fg); }
+.inv a:hover { color: var(--accent); }
+.linkbtn:disabled { color: var(--muted); cursor: default; }
+#swatches-date, #inv-edit-hint { margin: 4px 0 0; }
 
 .drop { display: block; border: 2px dashed var(--line); border-radius: 10px; padding: 36px 16px; text-align: center;
         cursor: pointer; background: var(--panel); transition: border-color .15s, background .15s; }
@@ -115,6 +119,12 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
     <div class="group">
       <h3>Inventory</h3>
       <div class="inv"><span id="inv-name"></span><button type="button" class="linkbtn" id="inv-pick">Replace…</button></div>
+      <form id="inv-edit" hidden>
+        <input type="text" id="spoolman-url" inputmode="url" placeholder="http://spoolman.local:7912"
+               spellcheck="false" autocomplete="off" aria-label="Spoolman address">
+        <p class="hint" id="inv-edit-hint">Enter to use, Esc to cancel</p>
+      </form>
+      <button type="button" class="linkbtn" id="inv-spoolman" hidden>Use Spoolman</button>
       <input type="file" id="inv-file" accept=".json,.csv" hidden>
     </div>
 
@@ -134,7 +144,7 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
         </div>
         <input type="range" id="top" min="0" max="10" step="1">
       </div>
-      <div class="range">
+      <div class="range" id="min_grams-row">
         <div class="top">
           <label for="min_grams">Min grams remaining</label>
           <input type="number" class="num" id="min_grams-num" min="0" max="1000" step="1" aria-label="Minimum grams remaining value">
@@ -173,6 +183,11 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
     </div>
 
     <div class="group"><button type="button" class="linkbtn" id="reset">Reset to defaults</button></div>
+
+    <div class="group">
+      <button type="button" class="linkbtn" id="reload-swatches">Reload filamentcolors.xyz library</button>
+      <p class="hint" id="swatches-date"></p>
+    </div>
   </aside>
 
   <main>
@@ -198,7 +213,7 @@ const STORE = "filmatch.options.v2";   // v1 stored `exclude` under the old opt-
 const $ = id => document.getElementById(id);
 
 let opts = { ...DEF, ...stored() };
-let loaded = { project: CFG.project, spools: CFG.spools };
+let loaded = { project: CFG.project, spools: CFG.spools, source: CFG.source, spools_url: CFG.spools_url };
 let lastDoc = "", lastFile = "", runId = 0, timer = 0, ctrl = null;
 let overrides = {};   // slot -> hex typed into the Requested column; cleared with each new project
 
@@ -324,6 +339,7 @@ async function run() {
     if (!res.ok) throw new Error(data.error || res.statusText);
     lastDoc = data.document;
     lastFile = data.file;
+    showSwatchesDate(data.swatches_date);   // the first match may have just downloaded it
     $("report").innerHTML = data.fragment;
     $("notes").replaceChildren(...data.notes.map(n => Object.assign(document.createElement("li"), { textContent: n })));
     $("results").hidden = false;
@@ -367,8 +383,15 @@ $("report").addEventListener("click", e => {
 // ---- files
 function showLoaded() {
   const inv = $("inv-name");
-  inv.textContent = loaded.spools || "None loaded. Drop your .json / .csv export.";
+  inv.replaceChildren(loaded.spools
+    ? Object.assign(document.createElement("a"),
+                    { href: loaded.spools_url, target: "_blank", rel: "noopener", textContent: loaded.spools })
+    : "None loaded. Drop your .json / .csv export.");
   inv.classList.toggle("missing", !loaded.spools);
+  // Spoolman's remaining weight is ignored, so the grams slider would do nothing.
+  $("inv-spoolman").hidden = !CFG.spoolman || loaded.source === "spoolman";
+  if (loaded.source !== "spoolman") $("inv-edit").hidden = true;
+  $("min_grams-row").hidden = loaded.source === "spoolman";
   const d = $("drop");
   if (!loaded.project) return;
   d.classList.add("loaded");
@@ -410,8 +433,46 @@ $("drop").addEventListener("keydown", e => {
   if (e.key === "Enter" || e.key === " ") { e.preventDefault(); $("proj-file").click(); }
 });
 $("proj-file").addEventListener("change", e => { uploadAll(e.target.files); e.target.value = ""; });
-$("inv-pick").addEventListener("click", () => $("inv-file").click());
+// On Spoolman, Replace asks for another server's address instead of a file;
+// a spool file can still be dropped on the window.
+$("inv-pick").addEventListener("click", () => {
+  if (loaded.source !== "spoolman") return $("inv-file").click();
+  const box = $("inv-edit"), input = $("spoolman-url");
+  box.hidden = !box.hidden;
+  if (box.hidden) return;
+  input.value = loaded.spools_url || "";
+  input.focus();
+  input.select();
+});
 $("inv-file").addEventListener("change", e => { uploadAll(e.target.files); e.target.value = ""; });
+
+async function useSpoolman(address) {
+  const q = address ? "?url=" + encodeURIComponent(address) : "";
+  const res = await fetch("/spoolman" + q, { method: "POST" });
+  const data = await res.json();
+  if (!res.ok) throw new Error(data.error || res.statusText);
+  loaded = data;
+  showLoaded();
+  setStatus("", "");
+  schedule(0);
+}
+
+$("inv-edit").addEventListener("submit", async e => {
+  e.preventDefault();
+  const address = $("spoolman-url").value.trim();
+  if (!address) return;
+  setStatus("busy", "Connecting to Spoolman…");
+  try {
+    await useSpoolman(address);
+    $("inv-edit").hidden = true;
+  } catch (err) {
+    setStatus("error", err.message);   // the old address stays in use; the box stays open to correct it
+  }
+});
+$("spoolman-url").addEventListener("keydown", e => {
+  if (e.key === "Escape") { $("inv-edit").hidden = true; setStatus("", ""); }
+});
+$("inv-spoolman").addEventListener("click", () => useSpoolman().catch(err => setStatus("error", err.message)));
 
 // The whole window is a drop target.
 let depth = 0;
@@ -427,6 +488,29 @@ addEventListener("drop", e => {
   uploadAll(e.dataTransfer.files);
 });
 
+// ---- filamentcolors.xyz library
+function showSwatchesDate(ms) {
+  $("swatches-date").textContent = ms ? `Downloaded ${new Date(ms).toLocaleDateString()}` : "Not downloaded yet";
+}
+
+$("reload-swatches").addEventListener("click", async () => {
+  const btn = $("reload-swatches");
+  btn.disabled = true;
+  $("swatches-date").textContent = "Downloading… (about a minute)";
+  try {
+    const res = await fetch("/swatches", { method: "POST" });
+    const data = await res.json();
+    if (!res.ok) throw new Error(data.error || res.statusText);
+    showSwatchesDate(data.date || Date.now());
+    schedule(0);
+  } catch (err) {
+    showSwatchesDate(CFG.swatches_date);
+    setStatus("error", `Couldn't reload the filamentcolors.xyz library: ${err.message}`);
+  } finally {
+    btn.disabled = false;
+  }
+});
+
 $("download").addEventListener("click", () => {
   const a = document.createElement("a");
   a.href = URL.createObjectURL(new Blob([lastDoc], { type: "text/html" }));
@@ -437,6 +521,7 @@ $("download").addEventListener("click", () => {
 
 syncControls();
 showLoaded();
+showSwatchesDate(CFG.swatches_date);
 schedule(0);
 </script>
 </body>
