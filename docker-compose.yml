@@ -12,9 +12,11 @@ services:
       # that directory is writable by uid 1000.
       - filmatch-data:/data
 
-    # Read spools from Spoolman instead of /data/my-spools.json:
+    # Read spools from Spoolman first (the page can switch to /data/my-spools.json).
+    # In Portainer, set SPOOLMAN_URL in the stack's environment variables and
+    # keep the ${SPOOLMAN_URL} reference: the panel alone doesn't reach the container.
     # environment:
-    #   SPOOLMAN_URL: http://spoolman:7912
+    #   SPOOLMAN_URL: ${SPOOLMAN_URL}
 
     # Optional flags, appended to the image's entrypoint (a later flag wins):
     # command: ["--suggest", "--include", "silk"]

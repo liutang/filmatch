@@ -339,9 +339,10 @@ def name_finish(name):
     return " ".join(f.title() for f in SPECIAL_FINISHES if re.search(r"\b" + f, name, re.I))
 
 
-def load_spoolman(url, exclude_finishes=()):
+def load_spoolman(url, min_grams=1, exclude_finishes=()):
     """The spools on a Spoolman server; Spoolman leaves archived ones out itself.
-    Only single-color filaments are matched, and remaining weight is ignored."""
+    Only single-color filaments are matched. A spool with no remaining weight
+    recorded is kept, as in a spool export."""
     api = spoolman_api(url)
     hit = _spoolman_cache.get(api)
     if hit and time.time() - hit[0] < SPOOLMAN_TTL:
@@ -357,22 +358,27 @@ def load_spoolman(url, exclude_finishes=()):
             raise FilmatchError(f"{api} didn't return a Spoolman spool list.")
         _spoolman_cache[api] = (time.time(), data)
 
-    entries = []
+    entries, skipped = [], 0
     for s in data:
+        grams = s.get("remaining_weight")
+        if grams is not None and grams < min_grams:
+            skipped += 1
+            continue
         f = s.get("filament") or {}
         name = (f.get("name") or "").strip()
         entries.append({"brand": (f.get("vendor") or {}).get("name") or "", "material": f.get("material") or "",
                         "finish": name_finish(name), "color": name,
                         "hex": None if f.get("multi_color_hexes") else norm_hex(f.get("color_hex")),
-                        "grams": None, "location": s.get("location")})
-    return group_spools(entries, exclude_finishes)
+                        "grams": grams, "location": s.get("location")})
+    spools, more = group_spools(entries, exclude_finishes)
+    return spools, skipped + more
 
 
 def load_inventory(inventory, min_grams=1, exclude_finishes=()):
     """`inventory` is ("file", path) or ("spoolman", url)."""
     kind, where = inventory
     if kind == "spoolman":
-        return load_spoolman(where, exclude_finishes)
+        return load_spoolman(where, min_grams, exclude_finishes)
     return load_spools(where, min_grams, exclude_finishes)
 
 # ----------------------------------------------------------- assignment
@@ -799,13 +805,17 @@ def serve(a):
         sys.exit(f"Web UI not found: {page}")
     tmp = tempfile.TemporaryDirectory(prefix="filmatch-")
     defaults = {k: getattr(a, k) for k in WEB_OPTS}
-    # `spoolman` is the server's address, which the page can change.
-    state = {"project": None, "spools": None, "spools_name": None, "swatches": None, "spoolman": a.spoolman}
+    # Both inventories are kept, and `source` says which one matches: "spoolman"
+    # (the server's address, which the page can change), "file" ((path, name) of
+    # --spools or the last dropped export), or None. Spoolman comes first.
+    state = {"project": None, "swatches": None, "spoolman": a.spoolman, "file": None, "source": None}
     lock = threading.Lock()
-    if a.spoolman:
-        state["spools"], state["spools_name"] = ("spoolman", a.spoolman), "Spoolman"
-    elif Path(a.spools).exists():
-        state["spools"], state["spools_name"] = ("file", Path(a.spools).resolve()), Path(a.spools).name
+    if Path(a.spools).exists():
+        state["file"] = (Path(a.spools).resolve(), Path(a.spools).name)
+    state["source"] = "spoolman" if a.spoolman else "file" if state["file"] else None
+    print("Inventory: " + (f"Spoolman at {spoolman_base(a.spoolman)}" if a.spoolman
+                           else f"{a.spools} (SPOOLMAN_URL is not set)" if state["file"]
+                           else f"none ({a.spools} not found, SPOOLMAN_URL is not set)"), file=sys.stderr)
     if a.project:
         state["project"] = read_project(a.project)
 
@@ -822,12 +832,21 @@ def serve(a):
         except OSError:
             return None
 
+    def inventory():
+        """The inventory matched against, as for load_inventory(), or None."""
+        if state["source"] == "spoolman":
+            return ("spoolman", state["spoolman"])
+        return ("file", state["file"][0]) if state["source"] == "file" else None
+
     def info():
         p = state["project"]
-        kind, where = state["spools"] or (None, None)
+        kind = state["source"]
         # The inventory's name links to Spoolman's own page, or to the loaded file.
-        link = spoolman_base(where) if kind == "spoolman" else "/inventory" if kind else None
-        return {"spools": state["spools_name"], "source": kind, "spools_url": link,
+        name, link = (("Spoolman", spoolman_base(state["spoolman"])) if kind == "spoolman"
+                      else (state["file"][1], "/inventory") if kind == "file" else (None, None))
+        return {"spools": name, "source": kind, "spools_url": link,
+                "spoolman_url": state["spoolman"] and spoolman_base(state["spoolman"]),
+                "has_file": bool(state["file"]),
                 "project": p and {"file": p["file"], "slots": len(p["slots"]),
                                   "used": sum(1 for s in p["slots"] if s["used_on"] and s["hex"])}}
 
@@ -865,7 +884,7 @@ def serve(a):
             try:
                 if method == "GET" and url.path == "/":
                     cfg = {"defaults": defaults, "finishes": [f.title() for f in SPECIAL_FINISHES],
-                           "spoolman": bool(a.spoolman), "swatches_date": swatches_date(), **info()}
+                           "swatches_date": swatches_date(), **info()}
                     self.send(page.read_text(encoding="utf-8").replace(
                         "/*__FILMATCH_CONFIG__*/null", json.dumps(cfg).replace("</", "<\\/")), "text/html")
                 elif method == "GET" and url.path == "/report.css":
@@ -887,17 +906,21 @@ def serve(a):
                     dest = Path(tmp.name) / ("spools" + (Path(name).suffix.lower() or ".json"))
                     dest.write_bytes(self.body())
                     load_spools(dest)  # validate before accepting it
-                    state["spools"], state["spools_name"] = ("file", dest), name
+                    state["file"], state["source"] = (dest, name), "file"
                     self.send(info())
-                elif method == "POST" and url.path == "/spoolman" and state["spoolman"]:
+                elif method == "POST" and url.path == "/spoolman" \
+                        and (state["spoolman"] or q.get("url", "").strip()):
                     if q.get("url", "").strip():
                         load_spoolman(q["url"])  # it must answer before it replaces the old address
                         state["spoolman"] = q["url"].strip()
-                    state["spools"], state["spools_name"] = ("spoolman", state["spoolman"]), "Spoolman"
+                    state["source"] = "spoolman"
                     self.send(info())
-                elif method == "GET" and url.path == "/inventory" and state["spools"] \
-                        and state["spools"][0] == "file":
-                    path = Path(state["spools"][1])
+                elif method == "POST" and url.path == "/source" and q.get("use") in ("spoolman", "file") \
+                        and state[q["use"]]:
+                    state["source"] = q["use"]
+                    self.send(info())
+                elif method == "GET" and url.path == "/inventory" and state["file"]:
+                    path = Path(state["file"][0])
                     # CSV as plain text, so the browser shows it rather than downloading it.
                     ctype = "application/json" if path.suffix.lower() == ".json" else "text/plain"
                     self.send(path.read_bytes(), ctype + "; charset=utf-8")
@@ -919,7 +942,7 @@ def serve(a):
         def analyze(self, q):
             if not state["project"]:
                 raise FilmatchError("Drop a .3mf project to analyze.")
-            if not state["spools"]:
+            if not inventory():
                 raise FilmatchError("No spool inventory loaded. Drop your my-spools.json (or .csv).")
             opts = argparse.Namespace(**defaults)
             for k, typ in WEB_OPTS.items():
@@ -933,7 +956,7 @@ def serve(a):
                     notes.append(f"filamentcolors.xyz unavailable: {ex}")
             project = copy.deepcopy(state["project"])
             apply_hex_overrides(project, q.get("hex"))
-            spools, skipped, rows, more = analyze(project, state["spools"], opts, swatches)
+            spools, skipped, rows, more = analyze(project, inventory(), opts, swatches)
             args = (project, rows, spools, opts.threshold, skipped)
             return {"notes": notes + more, "file": project["file"], "swatches_date": swatches_date(),
                     "fragment": report_fragment(*args, editable=True),
@@ -981,7 +1004,7 @@ def build_parser():
                     help="specialty finishes to allow back in -- every one is skipped by "
                          "default, e.g. silk,satin; 'all' keeps them all")
     ap.add_argument("--min-grams", type=float, default=1,
-                    help="skip spools with less remaining (spool exports only; Spoolman's weight is ignored)")
+                    help="skip spools with less remaining")
     ap.add_argument("--suggest", action="store_true", help="suggest filaments to buy for slots above threshold")
     ap.add_argument("--brands", default="", help="limit suggestions, e.g. polymaker,bambu")
     ap.add_argument("--no-measured", dest="measured", action="store_false",

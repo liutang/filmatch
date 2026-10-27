@@ -25,6 +25,6 @@ HEALTHCHECK --interval=30s --timeout=5s --start-period=5s --retries=3 \
 # Flags appended by `docker run` / compose `command:` land after these, and
 # argparse lets a later flag win -- so `--spools /data/other.json` or
 # `--suggest` can be added without repeating the whole line. Setting
-# SPOOLMAN_URL reads spools from Spoolman instead of --spools.
+# SPOOLMAN_URL reads spools from Spoolman first; the page can switch to --spools.
 ENTRYPOINT ["python3", "/app/filmatch.py", "--serve", "--no-browser", \
             "--host", "0.0.0.0", "--port", "8765", "--spools", "/data/my-spools.json"]
