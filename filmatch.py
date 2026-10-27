@@ -9,7 +9,8 @@ filmatch - match a 3MF project's filament colors to spools you already own.
 
 Reads Bambu Studio / OrcaSlicer 3MFs (per-plate usage, including painted
 regions) and PrusaSlicer 3MFs (slot colors + which slots are used).
-Inventory: 3DFilamentProfiles "Export My Spools" JSON or CSV.
+Inventory: 3DFilamentProfiles "Export My Spools" JSON or CSV, or a Spoolman
+server (--spoolman URL).
 Color distance: CIEDE2000 (ΔE). Standard library only, Python 3.8+.
 
 Each slot's target color defaults to filamentcolors.xyz's spectrophotometer-
@@ -251,7 +252,36 @@ def read_project(path, name=None):
     return {"file": name or Path(path).name, "source": source, "slots": slots, "plates": plates}
 
 # ----------------------------------------------------------------- inventory
+SPECIAL_FINISHES = ("silk", "glitter", "marble", "starlight", "sparkle", "galaxy", "metal",
+                    "satin", "wood", "translucent", "glow")
+
+
+def group_spools(entries, exclude_finishes=()):
+    """Spools of the same filament (brand, material, finish, color, hex) become one
+    candidate. `entries` are dicts with those keys plus grams and location; one
+    without a single hex, or with an excluded finish, is skipped."""
+    excl = {e.strip().lower() for e in exclude_finishes if e.strip()}
+    groups = {}
+    skipped = 0
+    for r in entries:
+        hx, finish = r["hex"], r["finish"]
+        if not hx or any(e in finish.lower() for e in excl):
+            skipped += 1
+            continue
+        key = (r["brand"], r["material"], finish, r["color"], hx)
+        g = groups.setdefault(key, {
+            "brand": r["brand"], "material": r["material"], "finish": finish,
+            "color": r["color"], "hex": hx, "lab": hex_to_lab(hx),
+            "count": 0, "grams": 0.0, "locations": set()})
+        g["count"] += 1
+        g["grams"] += r["grams"] or 0
+        if r["location"]:
+            g["locations"].add(r["location"])
+    return list(groups.values()), skipped
+
+
 def load_spools(path, min_grams=1, exclude_finishes=()):
+    """A 3DFilamentProfiles export, JSON or CSV."""
     p = Path(path)
     if p.suffix.lower() == ".csv":
         with open(p, newline="", encoding="utf-8-sig") as f:
@@ -260,30 +290,90 @@ def load_spools(path, min_grams=1, exclude_finishes=()):
         data = json.loads(p.read_text(encoding="utf-8"))
         rows = data if isinstance(data, list) else next(v for v in data.values() if isinstance(v, list))
 
-    excl = {e.strip().lower() for e in exclude_finishes if e.strip()}
-    groups = {}
-    skipped = 0
+    entries, skipped = [], 0
     for r in rows:
-        hx = norm_hex(r.get("rgb") or r.get("color_hex") or r.get("hex"))
-        finish = (r.get("material_type") or "").strip()
         grams = r.get("remaining_grams")
         try:
             grams = float(grams) if grams not in (None, "") else None
         except ValueError:
             grams = None
-        if not hx or (grams is not None and grams < min_grams) or any(e in finish.lower() for e in excl):
+        if grams is not None and grams < min_grams:
             skipped += 1
             continue
-        key = (r.get("brand"), r.get("material"), finish, r.get("color"), hx)
-        g = groups.setdefault(key, {
-            "brand": r.get("brand") or "", "material": r.get("material") or "", "finish": finish,
-            "color": r.get("color") or "", "hex": hx, "lab": hex_to_lab(hx),
-            "count": 0, "grams": 0.0, "locations": set()})
-        g["count"] += 1
-        g["grams"] += grams or 0
-        if r.get("location"):
-            g["locations"].add(r["location"])
-    return list(groups.values()), skipped
+        entries.append({"brand": r.get("brand") or "", "material": r.get("material") or "",
+                        "finish": (r.get("material_type") or "").strip(), "color": r.get("color") or "",
+                        "hex": norm_hex(r.get("rgb") or r.get("color_hex") or r.get("hex")),
+                        "grams": grams, "location": r.get("location")})
+    spools, more = group_spools(entries, exclude_finishes)
+    return spools, skipped + more
+
+
+SPOOLMAN_TTL = 30   # seconds a fetched spool list is reused: the web UI re-matches on every slider move
+_spoolman_cache = {}
+PLAIN_RE = re.compile(r"\b(?:basic|matte)\b", re.I)
+SPOOLMAN_FINISH_NOTE = ("Spoolman has no finish field, so specialty finishes are recognized from words in "
+                        "the filament name. A color name can be mistaken for a finish (e.g. \"Wood Brown\"); "
+                        "include that finish if a spool is skipped wrongly.")
+
+
+def spoolman_base(url):
+    """The address of a Spoolman server's web UI, given with or without /api/v1."""
+    url = url.strip().rstrip("/")
+    if "://" not in url:
+        url = "http://" + url
+    if url.endswith("/api/v1"):
+        url = url[:-len("/api/v1")]
+    return url
+
+
+def spoolman_api(url):
+    return spoolman_base(url) + "/api/v1/spool"
+
+
+def name_finish(name):
+    """The specialty finish named in a filament name ("Silk Gold" -> "Silk"), or "".
+    A name that says basic or matte is plain whatever else it says: there a finish
+    word is part of the color ("Basic Wood Colour", "Matte Wood Brown")."""
+    if PLAIN_RE.search(name):
+        return ""
+    return " ".join(f.title() for f in SPECIAL_FINISHES if re.search(r"\b" + f, name, re.I))
+
+
+def load_spoolman(url, exclude_finishes=()):
+    """The spools on a Spoolman server; Spoolman leaves archived ones out itself.
+    Only single-color filaments are matched, and remaining weight is ignored."""
+    api = spoolman_api(url)
+    hit = _spoolman_cache.get(api)
+    if hit and time.time() - hit[0] < SPOOLMAN_TTL:
+        data = hit[1]
+    else:
+        try:
+            req = urllib.request.Request(api, headers={"User-Agent": UA, "Accept": "application/json"})
+            with urllib.request.urlopen(req, timeout=15) as resp:
+                data = json.load(resp)
+        except (OSError, ValueError) as ex:
+            raise FilmatchError(f"Can't read spools from Spoolman at {api}: {ex}")
+        if not isinstance(data, list):
+            raise FilmatchError(f"{api} didn't return a Spoolman spool list.")
+        _spoolman_cache[api] = (time.time(), data)
+
+    entries = []
+    for s in data:
+        f = s.get("filament") or {}
+        name = (f.get("name") or "").strip()
+        entries.append({"brand": (f.get("vendor") or {}).get("name") or "", "material": f.get("material") or "",
+                        "finish": name_finish(name), "color": name,
+                        "hex": None if f.get("multi_color_hexes") else norm_hex(f.get("color_hex")),
+                        "grams": None, "location": s.get("location")})
+    return group_spools(entries, exclude_finishes)
+
+
+def load_inventory(inventory, min_grams=1, exclude_finishes=()):
+    """`inventory` is ("file", path) or ("spoolman", url)."""
+    kind, where = inventory
+    if kind == "spoolman":
+        return load_spoolman(where, exclude_finishes)
+    return load_spools(where, min_grams, exclude_finishes)
 
 # ----------------------------------------------------------- assignment
 def hungarian(cost):
@@ -482,10 +572,6 @@ def sw(hx, color):
     return f"\x1b[48;2;{r};{g};{b}m    \x1b[0m "
 
 
-SPECIAL_FINISHES = ("silk", "glitter", "marble", "starlight", "sparkle", "galaxy", "metal",
-                    "satin", "wood", "translucent", "glow")
-
-
 def finish_note(sp):
     f = sp["finish"].lower()
     return f"  [! {sp['finish']} finish]" if any(x in f for x in SPECIAL_FINISHES) else ""
@@ -496,9 +582,18 @@ def grade(d, t):
     return "OK " if d <= t else ("~  " if d <= 2 * t else "X  ")
 
 
+def finish_color(sp):
+    """Finish and color, without the finish when the color already names it (a
+    Spoolman filament name such as "Silk Gold" holds both)."""
+    words = sp["color"].lower().split()
+    if all(w in words for w in sp["finish"].lower().split()):
+        return sp["color"]
+    return f"{sp['finish']} {sp['color']}".strip()
+
+
 def spool_label(sp):
     extra = f" x{sp['count']}" if sp["count"] > 1 else ""
-    return f"{sp['brand']} {sp['material']} {sp['finish']} {sp['color']}{extra}".replace("  ", " ")
+    return f"{sp['brand']} {sp['material']} {finish_color(sp)}{extra}".replace("  ", " ")
 
 
 def alt_candidates(r, k, pick_d):
@@ -537,7 +632,7 @@ def print_report(project, rows, spools, threshold, color, skipped):
         if best_k != k:
             print(f"          (nearest was {spools[best_k]['color']} ΔE {best_d:.1f}, "
                   f"but it's assigned to another slot)")
-        alts = [f"{spools[j]['brand']} {spools[j]['finish']} {spools[j]['color']} {dd:.1f}"
+        alts = [f"{spools[j]['brand']} {finish_color(spools[j])} {dd:.1f}"
                 for dd, j in alt_candidates(r, k, d)]
         if alts:
             print(f"          alt: {' | '.join(alts)}")
@@ -662,12 +757,13 @@ def write_html(path, project, rows, spools, threshold, skipped=None):
     Path(path).write_text(report_document(project, rows, spools, threshold, skipped), encoding="utf-8")
 
 
-def analyze(project, spools_path, a, swatches):
-    """The matching pipeline shared by the CLI and --serve. `a` carries the
-    option values (an argparse namespace); `project` gets measured targets
-    written into it. Returns (spools, skipped, rows, notes)."""
-    spools, skipped = load_spools(spools_path, a.min_grams, a.exclude.split(","))
-    notes = []
+def analyze(project, inventory, a, swatches):
+    """The matching pipeline shared by the CLI and --serve. `inventory` is as for
+    load_inventory(); `a` carries the option values (an argparse namespace);
+    `project` gets measured targets written into it. Returns (spools, skipped,
+    rows, notes)."""
+    spools, skipped = load_inventory(inventory, a.min_grams, a.exclude.split(","))
+    notes = [SPOOLMAN_FINISH_NOTE] if inventory[0] == "spoolman" else []
     if a.measured and swatches:
         used = sum(1 for s in project["slots"] if s["used_on"] and s["hex"])
         n = apply_measured_targets(project, swatches, a.measured_tolerance)
@@ -703,10 +799,13 @@ def serve(a):
         sys.exit(f"Web UI not found: {page}")
     tmp = tempfile.TemporaryDirectory(prefix="filmatch-")
     defaults = {k: getattr(a, k) for k in WEB_OPTS}
-    state = {"project": None, "spools": None, "spools_name": None, "swatches": None}
+    # `spoolman` is the server's address, which the page can change.
+    state = {"project": None, "spools": None, "spools_name": None, "swatches": None, "spoolman": a.spoolman}
     lock = threading.Lock()
-    if Path(a.spools).exists():
-        state["spools"], state["spools_name"] = Path(a.spools).resolve(), Path(a.spools).name
+    if a.spoolman:
+        state["spools"], state["spools_name"] = ("spoolman", a.spoolman), "Spoolman"
+    elif Path(a.spools).exists():
+        state["spools"], state["spools_name"] = ("file", Path(a.spools).resolve()), Path(a.spools).name
     if a.project:
         state["project"] = read_project(a.project)
 
@@ -716,9 +815,19 @@ def serve(a):
                 state["swatches"] = load_filamentcolors(a.refresh)
             return state["swatches"]
 
+    def swatches_date():
+        """When the cached swatch library was downloaded (ms since the epoch), or None."""
+        try:
+            return int(cache_path().stat().st_mtime * 1000)
+        except OSError:
+            return None
+
     def info():
         p = state["project"]
-        return {"spools": state["spools_name"],
+        kind, where = state["spools"] or (None, None)
+        # The inventory's name links to Spoolman's own page, or to the loaded file.
+        link = spoolman_base(where) if kind == "spoolman" else "/inventory" if kind else None
+        return {"spools": state["spools_name"], "source": kind, "spools_url": link,
                 "project": p and {"file": p["file"], "slots": len(p["slots"]),
                                   "used": sum(1 for s in p["slots"] if s["used_on"] and s["hex"])}}
 
@@ -755,7 +864,8 @@ def serve(a):
             q = {k: v[0] for k, v in parse_qs(url.query, keep_blank_values=True).items()}
             try:
                 if method == "GET" and url.path == "/":
-                    cfg = {"defaults": defaults, "finishes": [f.title() for f in SPECIAL_FINISHES], **info()}
+                    cfg = {"defaults": defaults, "finishes": [f.title() for f in SPECIAL_FINISHES],
+                           "spoolman": bool(a.spoolman), "swatches_date": swatches_date(), **info()}
                     self.send(page.read_text(encoding="utf-8").replace(
                         "/*__FILMATCH_CONFIG__*/null", json.dumps(cfg).replace("</", "<\\/")), "text/html")
                 elif method == "GET" and url.path == "/report.css":
@@ -777,8 +887,24 @@ def serve(a):
                     dest = Path(tmp.name) / ("spools" + (Path(name).suffix.lower() or ".json"))
                     dest.write_bytes(self.body())
                     load_spools(dest)  # validate before accepting it
-                    state["spools"], state["spools_name"] = dest, name
+                    state["spools"], state["spools_name"] = ("file", dest), name
                     self.send(info())
+                elif method == "POST" and url.path == "/spoolman" and state["spoolman"]:
+                    if q.get("url", "").strip():
+                        load_spoolman(q["url"])  # it must answer before it replaces the old address
+                        state["spoolman"] = q["url"].strip()
+                    state["spools"], state["spools_name"] = ("spoolman", state["spoolman"]), "Spoolman"
+                    self.send(info())
+                elif method == "GET" and url.path == "/inventory" and state["spools"] \
+                        and state["spools"][0] == "file":
+                    path = Path(state["spools"][1])
+                    # CSV as plain text, so the browser shows it rather than downloading it.
+                    ctype = "application/json" if path.suffix.lower() == ".json" else "text/plain"
+                    self.send(path.read_bytes(), ctype + "; charset=utf-8")
+                elif method == "POST" and url.path == "/swatches":
+                    with lock:  # a match waiting on the library gets the new one
+                        state["swatches"] = load_filamentcolors(refresh=True)
+                    self.send({"swatches": len(state["swatches"]), "date": swatches_date()})
                 elif method == "GET" and url.path == "/analyze":
                     self.send(self.analyze(q))
                 else:
@@ -809,7 +935,7 @@ def serve(a):
             apply_hex_overrides(project, q.get("hex"))
             spools, skipped, rows, more = analyze(project, state["spools"], opts, swatches)
             args = (project, rows, spools, opts.threshold, skipped)
-            return {"notes": notes + more, "file": project["file"],
+            return {"notes": notes + more, "file": project["file"], "swatches_date": swatches_date(),
                     "fragment": report_fragment(*args, editable=True),
                     "document": report_document(*args)}
 
@@ -843,6 +969,9 @@ def build_parser():
     ap.add_argument("project", nargs="?", help=".3mf file (optional with --serve, which preloads it)")
     ap.add_argument("--spools", default="my-spools.json",
                     help="3DFilamentProfiles export (.json or .csv; default: my-spools.json)")
+    ap.add_argument("--spoolman", metavar="URL", default=os.environ.get("SPOOLMAN_URL", ""),
+                    help="read spools from this Spoolman server instead of --spools "
+                         "(default: $SPOOLMAN_URL; '' turns it off)")
     ap.add_argument("--threshold", type=float, default=5.0, help="ΔE you consider a match (default 5)")
     ap.add_argument("--top", type=int, default=2,
                     help="alternate spools to show per slot in addition to the pick (default 2)")
@@ -851,7 +980,8 @@ def build_parser():
     ap.add_argument("--include", default="",
                     help="specialty finishes to allow back in -- every one is skipped by "
                          "default, e.g. silk,satin; 'all' keeps them all")
-    ap.add_argument("--min-grams", type=float, default=1, help="skip spools with less remaining")
+    ap.add_argument("--min-grams", type=float, default=1,
+                    help="skip spools with less remaining (spool exports only; Spoolman's weight is ignored)")
     ap.add_argument("--suggest", action="store_true", help="suggest filaments to buy for slots above threshold")
     ap.add_argument("--brands", default="", help="limit suggestions, e.g. polymaker,bambu")
     ap.add_argument("--no-measured", dest="measured", action="store_false",
@@ -884,8 +1014,8 @@ def main():
             return serve(a)
         if not a.project:
             ap.error("the project .3mf is required (or use --serve)")
-        if not Path(a.spools).exists():
-            sys.exit(f"Spool inventory not found: {a.spools}  (pass --spools <file>)")
+        if not a.spoolman and not Path(a.spools).exists():
+            sys.exit(f"Spool inventory not found: {a.spools}  (pass --spools <file> or --spoolman <url>)")
         project = read_project(a.project)
     except (FilmatchError, zipfile.BadZipFile) as ex:
         sys.exit(f"{a.project}: {ex}")
@@ -896,7 +1026,11 @@ def main():
             swatches = load_filamentcolors(a.refresh)
         except (urllib.error.URLError, OSError) as ex:
             print(f"(filamentcolors.xyz unavailable: {ex})", file=sys.stderr)
-    spools, skipped, rows, notes = analyze(project, a.spools, a, swatches)
+    inventory = ("spoolman", a.spoolman) if a.spoolman else ("file", a.spools)
+    try:
+        spools, skipped, rows, notes = analyze(project, inventory, a, swatches)
+    except FilmatchError as ex:
+        sys.exit(str(ex))
     for note in notes:
         print(note, file=sys.stderr)
     color = not a.no_color and sys.stdout.isatty() and os.environ.get("NO_COLOR") is None

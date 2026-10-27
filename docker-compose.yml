@@ -12,6 +12,10 @@ services:
       # that directory is writable by uid 1000.
       - filmatch-data:/data
 
+    # Read spools from Spoolman instead of /data/my-spools.json:
+    # environment:
+    #   SPOOLMAN_URL: http://spoolman:7912
+
     # Optional flags, appended to the image's entrypoint (a later flag wins):
     # command: ["--suggest", "--include", "silk"]
 
