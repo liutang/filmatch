@@ -68,13 +68,13 @@ python3 filmatch.py Project.3mf --spoolman http://spoolman.local:7912
 | --- | --- | --- |
 | `project` | — | the `.3mf` file (required) |
 | `--spools FILE` | `my-spools.json` | 3DFilamentProfiles export, `.json` or `.csv` |
-| `--spoolman URL` | `$SPOOLMAN_URL` | read spools from a Spoolman server instead of `--spools`; `''` turns it off |
+| `--spoolman URL` | `$SPOOLMAN_URL` | read spools from a Spoolman server; used before `--spools`; `''` turns it off |
 | `--threshold N` | `5.0` | ΔE at or below which a match is "OK" |
 | `--top N` | `2` | alternate spools to show per slot, in addition to the pick |
 | `--any-material` | off | don't restrict matches to the slot's material family |
 | `--allow-reuse` | off | let two slots map to the same spool |
 | `--include LIST` | — | specialty finishes to allow back in (silk, glitter, wood, …); every one is skipped by default. `all` keeps them all |
-| `--min-grams N` | `1` | skip spools with less remaining (spool exports only) |
+| `--min-grams N` | `1` | skip spools with less remaining |
 | `--suggest` | off | list filaments to buy for slots above threshold |
 | `--brands LIST` | — | limit suggestions to these makers, e.g. `polymaker,bambu` |
 | `--no-measured` | off | match the 3MF's requested hex as-is (skip filamentcolors.xyz lookup) |
@@ -105,12 +105,12 @@ works with any Spoolman install:
 | color and label | filament name |
 | hex | filament color (single-color filaments only) |
 | location | spool location |
+| grams remaining, for `--min-grams` | spool remaining weight |
 
 - **Only single-color filaments are matched.** Spools of multi-color filaments,
   and spools with no color set, are skipped and counted as skipped in the report.
-- **Remaining weight is ignored.** filmatch matches colors, and every spool
-  Spoolman lists counts. Archived spools are left out by Spoolman itself.
-  `--min-grams` applies to spool exports only.
+- **Archived spools are left out** by Spoolman itself. A spool with no
+  remaining weight recorded is kept whatever `--min-grams` says.
 - **Finishes are guessed from the filament name.** Spoolman has no finish
   field, so a specialty finish is recognized from a word in the name: "Silk
   Gold" is silk, "Glitter Galaxy Black" is glitter and galaxy. A name that
@@ -139,9 +139,12 @@ also drop your spool export (`.json` / `.csv`) to swap inventories; by default
 the server uses `--spoolman` if set, otherwise `--spools` from where you started
 it. The inventory's name is a link: it opens Spoolman, or the loaded file, in a
 new tab. On Spoolman, **Replace…** asks for another Spoolman address, which is
-used once it answers; a spool file can still be dropped on the window. After you
-drop a file, **Use Spoolman** switches back to the server.
-The min grams slider is hidden while Spoolman is the inventory. **Download HTML report**
+used once it answers; a spool file can still be dropped on the window. The
+**Use Spoolman** switch moves between Spoolman and the spool file (`--spools`,
+or one you dropped). Started without `--spoolman`, turning it on asks for a
+Spoolman address; with no spool file, turning it off opens the file picker. A
+restart goes back to how the server was started.
+**Download HTML report**
 saves the same standalone file `--html` writes. **Reload filamentcolors.xyz
 library**, at the bottom of the options, downloads the swatch library again
 (like `--refresh`) and shows when the cached copy was downloaded.
@@ -226,13 +229,27 @@ Dropping a `.json`/`.csv` on the page still works, but it applies to the running
 container only and is lost on restart, so the mounted file stays the source of
 truth.
 
-To use Spoolman instead of a spool file, set `SPOOLMAN_URL`. It takes over from
-the image's `--spools /data/my-spools.json`:
+To use Spoolman, set `SPOOLMAN_URL`. Spoolman is then used first, and the
+page's **Use Spoolman** switch moves to `data/my-spools.json` and back. Without
+`SPOOLMAN_URL`, the file is used, and the switch asks for a Spoolman address:
 
 ```yaml
     environment:
       SPOOLMAN_URL: http://spoolman:7912
 ```
+
+**In Portainer, the stack's *Environment variables* panel isn't enough on its
+own.** Portainer only substitutes those values into `${...}` placeholders in
+the compose file; it doesn't pass them into the container. Reference the
+variable in the service:
+
+```yaml
+    environment:
+      SPOOLMAN_URL: ${SPOOLMAN_URL}
+```
+
+The container log says which inventory it started with (`Inventory: Spoolman
+at …`, or `… (SPOOLMAN_URL is not set)`).
 
 Extra flags are appended to the entrypoint, and a later flag wins, so compose can
 override defaults without repeating the command:
@@ -254,7 +271,7 @@ directory) or the swatch cache can't be written.
 
 **There is no authentication.** Anyone who can reach the port can upload a
 project, read your inventory, make the server fetch from filamentcolors.xyz,
-and, when Spoolman is set up, point it at another Spoolman address.
+and point it at a Spoolman address of their choosing.
 Keep it on your LAN or behind a reverse proxy / VPN that does the auth. Related:
 the server holds one project and one inventory at a time, so two people using it
 at once will overwrite each other's uploads — it's built for one user.

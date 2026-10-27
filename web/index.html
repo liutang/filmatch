@@ -124,7 +124,7 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
                spellcheck="false" autocomplete="off" aria-label="Spoolman address">
         <p class="hint" id="inv-edit-hint">Enter to use, Esc to cancel</p>
       </form>
-      <button type="button" class="linkbtn" id="inv-spoolman" hidden>Use Spoolman</button>
+      <div class="row"><label for="inv-use-spoolman">Use Spoolman</label><input type="checkbox" class="switch" id="inv-use-spoolman"></div>
       <input type="file" id="inv-file" accept=".json,.csv" hidden>
     </div>
 
@@ -144,7 +144,7 @@ input[type=text] { width: 100%; padding: 6px 8px; margin-top: 6px; border: 1px s
         </div>
         <input type="range" id="top" min="0" max="10" step="1">
       </div>
-      <div class="range" id="min_grams-row">
+      <div class="range">
         <div class="top">
           <label for="min_grams">Min grams remaining</label>
           <input type="number" class="num" id="min_grams-num" min="0" max="1000" step="1" aria-label="Minimum grams remaining value">
@@ -213,7 +213,8 @@ const STORE = "filmatch.options.v2";   // v1 stored `exclude` under the old opt-
 const $ = id => document.getElementById(id);
 
 let opts = { ...DEF, ...stored() };
-let loaded = { project: CFG.project, spools: CFG.spools, source: CFG.source, spools_url: CFG.spools_url };
+let loaded = { project: CFG.project, spools: CFG.spools, source: CFG.source, spools_url: CFG.spools_url,
+               spoolman_url: CFG.spoolman_url, has_file: CFG.has_file };
 let lastDoc = "", lastFile = "", runId = 0, timer = 0, ctrl = null;
 let overrides = {};   // slot -> hex typed into the Requested column; cleared with each new project
 
@@ -388,10 +389,8 @@ function showLoaded() {
                     { href: loaded.spools_url, target: "_blank", rel: "noopener", textContent: loaded.spools })
     : "None loaded. Drop your .json / .csv export.");
   inv.classList.toggle("missing", !loaded.spools);
-  // Spoolman's remaining weight is ignored, so the grams slider would do nothing.
-  $("inv-spoolman").hidden = !CFG.spoolman || loaded.source === "spoolman";
+  $("inv-use-spoolman").checked = loaded.source === "spoolman";
   if (loaded.source !== "spoolman") $("inv-edit").hidden = true;
-  $("min_grams-row").hidden = loaded.source === "spoolman";
   const d = $("drop");
   if (!loaded.project) return;
   d.classList.add("loaded");
@@ -435,20 +434,25 @@ $("drop").addEventListener("keydown", e => {
 $("proj-file").addEventListener("change", e => { uploadAll(e.target.files); e.target.value = ""; });
 // On Spoolman, Replace asks for another server's address instead of a file;
 // a spool file can still be dropped on the window.
-$("inv-pick").addEventListener("click", () => {
-  if (loaded.source !== "spoolman") return $("inv-file").click();
-  const box = $("inv-edit"), input = $("spoolman-url");
-  box.hidden = !box.hidden;
-  if (box.hidden) return;
-  input.value = loaded.spools_url || "";
+function openSpoolmanBox() {
+  const input = $("spoolman-url");
+  $("inv-edit").hidden = false;
+  input.value = loaded.spoolman_url || "";
   input.focus();
   input.select();
+}
+function closeSpoolmanBox() {
+  $("inv-edit").hidden = true;
+  showLoaded();   // a switch turned on for an address never given goes back off
+}
+$("inv-pick").addEventListener("click", () => {
+  if (loaded.source !== "spoolman") return $("inv-file").click();
+  $("inv-edit").hidden ? openSpoolmanBox() : closeSpoolmanBox();
 });
 $("inv-file").addEventListener("change", e => { uploadAll(e.target.files); e.target.value = ""; });
 
-async function useSpoolman(address) {
-  const q = address ? "?url=" + encodeURIComponent(address) : "";
-  const res = await fetch("/spoolman" + q, { method: "POST" });
+async function switchInventory(path) {
+  const res = await fetch(path, { method: "POST" });
   const data = await res.json();
   if (!res.ok) throw new Error(data.error || res.statusText);
   loaded = data;
@@ -463,16 +467,31 @@ $("inv-edit").addEventListener("submit", async e => {
   if (!address) return;
   setStatus("busy", "Connecting to Spoolman…");
   try {
-    await useSpoolman(address);
+    await switchInventory("/spoolman?url=" + encodeURIComponent(address));
     $("inv-edit").hidden = true;
   } catch (err) {
     setStatus("error", err.message);   // the old address stays in use; the box stays open to correct it
   }
 });
 $("spoolman-url").addEventListener("keydown", e => {
-  if (e.key === "Escape") { $("inv-edit").hidden = true; setStatus("", ""); }
+  if (e.key === "Escape") { closeSpoolmanBox(); setStatus("", ""); }
 });
-$("inv-spoolman").addEventListener("click", () => useSpoolman().catch(err => setStatus("error", err.message)));
+// The switch moves between Spoolman and the spool file. With no Spoolman address
+// yet it asks for one, and with no spool file it opens the file picker; the
+// switch settles once that inventory is in use.
+$("inv-use-spoolman").addEventListener("change", e => {
+  const on = e.target.checked;
+  if (on && !loaded.spoolman_url) return openSpoolmanBox();
+  if (!on && !loaded.has_file) {
+    e.target.checked = true;
+    return $("inv-file").click();
+  }
+  $("inv-edit").hidden = true;
+  switchInventory("/source?use=" + (on ? "spoolman" : "file")).catch(err => {
+    setStatus("error", err.message);
+    showLoaded();   // put the switch back to the inventory still in use
+  });
+});
 
 // The whole window is a drop target.
 let depth = 0;
